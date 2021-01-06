@@ -1,0 +1,415 @@
+---
+title: "Dynamic Model Fit"
+runtime: shiny
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    source_code: embed
+    theme: cosmo
+always_allow_html: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+library(groundhog)
+#groundhog.library('shiny', '2020-06-20')
+groundhog.library(shiny,'2020-06-20')
+groundhog.library(rlang,'2020-06-20')
+groundhog.library(tidyverse,'2020-06-20')
+groundhog.library(knitr,'2020-06-20')
+groundhog.library(xfun, '2020-06-20')
+
+library(rmarkdown)
+library(lavaan)
+library(dplyr)
+library(tidyr)
+library(simstandard)
+library(shinythemes)
+library(flexdashboard)
+library(knitr)
+library(tools)
+library(patchwork)
+library(shinybusy)
+library(purrr)
+library(stringr)
+#library(shinycssloaders)
+
+#List aesthetics first
+```
+
+
+```{r design}
+fluidPage(theme = shinytheme("slate"),
+          shinybusy::add_busy_bar(color = "#BECEE4"))
+
+options(shiny.sanitize.errors = FALSE)
+```
+
+Sidebar {.sidebar}
+=====================================
+
+This app uses Monte Carlo simulations to generate dynamic fit index cutoffs for factor models.
+
+\  
+
+```{r inputs}
+numericInput("sampsize", "Input Sample Size", value=NULL)
+
+fileInput("model_syntax", "Input Model Syntax",
+          placeholder = ".txt file",
+          accept = c("text",
+                     ".txt",
+                     "txt"))
+
+helpText("This may take a few minutes.
+         Please only press submit once.")
+
+actionButton("go", "Submit")
+```
+
+```{r rename}
+#Name inputs
+n <- eventReactive(input$go,{input$sampsize})
+model <- eventReactive(input$go,{input$model_syntax})
+```
+
+```{r number_factor}
+#### Function for Number of Factors ####
+
+number_factor <- function(model){
+  
+  #read in the model
+  Mod <- utils::read.delim(model()$datapath, header = FALSE)   
+  Mod_C <- base::as.character(Mod$V1)
+  
+  #prep the model
+  lav_file <- lavaan::lavaanify(Mod_C, fixed.x=FALSE) %>%   
+    dplyr::filter(.data$lhs != .data$rhs)                  
+  
+  #isolate factors
+  factors <- lav_file %>%                    
+    dplyr::filter(op=="=~") %>%            
+    dplyr::select(lhs) %>%                 
+    base::unique()                   
+  
+  #identify number of factors in model
+  num_factors <- base::nrow(factors)      
+  
+  return(num_factors)
+}
+```
+
+```{r unstandardized}
+#Did they enter unstandardized loadings?  Aka, do they have any loadings = 1?
+unstandardized <- function(model){
+  Mod <- utils::read.delim(model()$datapath, header = FALSE)   
+  Mod_C <- base::as.character(Mod$V1)             
+  
+  lav_file <- lavaan::lavaanify(Mod_C, fixed.x=FALSE) %>%  
+    dplyr::filter(.data$lhs != .data$rhs)                  
+  
+  one_plus <- lav_file %>% 
+    dplyr::filter(ustart >= 1) %>% 
+    base::nrow()
+  
+  return(one_plus)
+}
+
+```
+
+```{r cleanmodel}
+#### Function to create model statement without numbers from user model (for input) ####
+
+cleanmodel <- function(model){
+  
+  #read in the model
+  Mod <- utils::read.delim(model()$datapath, header = FALSE)   
+  Mod_C <- base::as.character(Mod$V1)
+  
+  clean <- Mod_C %>%
+    lavaan::lavaanify(fixed.x = FALSE) %>%
+    dplyr::filter(.data$lhs != .data$rhs) %>%
+    dplyr::group_by(.data$lhs, .data$op) %>%
+    dplyr::summarise(rhs = paste(.data$rhs, collapse = " + ")) %>%
+    dplyr::arrange(dplyr::desc(.data$op)) %>%
+    tidyr::unite("l", .data$lhs, .data$op, .data$rhs, sep = " ") %>%
+    dplyr::pull(.data$l)
+  
+  return(clean)
+  
+}
+```
+
+```{r}
+defre <- function(model,n){
+  
+  #Get clean model equation
+  mod <- cleanmodel(model()$datapath)
+  
+  #Get parameters for true dgm
+  Mod <- utils::read.delim(model()$datapath, header = FALSE)   
+  Mod_C <- base::as.character(Mod$V1) 
+  
+  true_dgm <- Mod_C
+  
+  #Run one simulation
+  dat <- simstandard::sim_standardized(true_dgm,n=n(),latent=FALSE,errors=FALSE)
+  fit <- lavaan::cfa(model=mod,data=dat,std.lv=TRUE)
+  
+  #Number of freely estimated paths
+  paths <- max(lavaan::parTable(fit)$free)
+  
+  #Number of unique values in input matrix
+  parms <- nrow(lavaan::lavInspect(fit,"std.lv")$theta)
+  tot.parms <- (parms*(1+parms))/2
+  
+  #Subtract
+  return(tot.parms-paths)
+}
+```
+
+```{r multi_factor_num}
+### Function to see which items are available ###
+
+multi_factor_num <- function(model){
+  
+  Mod <- utils::read.delim(model()$datapath, header = FALSE)   
+  Mod_C <- base::as.character(Mod$V1)   
+  
+  #Lavaanify it - have lavaan tell us the parameters
+  lav_file <- lavaan::lavaanify(Mod_C, fixed.x=FALSE) %>%
+    dplyr::filter(.data$lhs != .data$rhs)
+  
+  #identify all factor names
+  factors <- lav_file %>%
+    dplyr::filter(op=="=~") %>%
+    dplyr::select(lhs) %>%
+    base::unique()
+  
+  #Identify number of items per factor
+  num_items <- lav_file %>%
+    dplyr::filter(op=="=~") %>%
+    dplyr::group_by(lhs) %>%
+    dplyr::count() %>%
+    dplyr::ungroup() %>%
+    base::as.data.frame() %>%
+    `colnames<-`(c("lhs","Original"))
+  
+  #Identify any items that already have an error covariance
+  items_covariance <- factors %>%
+    dplyr::mutate(type="Factor") %>%
+    dplyr::full_join(lav_file, by = "lhs") %>%
+    dplyr::select(-type,type) %>%
+    dplyr::select(lhs,op,rhs,type) %>%
+    dplyr::filter(op=="=~" | is.na(type)) %>%
+    dplyr::filter(is.na(type)) %>%
+    dplyr::select(-type) %>%
+    tidyr::pivot_longer(-op,names_to = "test", values_to = "rhs") %>%
+    dplyr::select(-op,-test) %>%
+    dplyr::mutate(lhs=NA,op=NA,ustart=NA)
+  
+  #Isolate the items that do not already have an error covariance or cross-loading
+  solo_items <- lav_file %>%
+    dplyr::select(lhs,op,rhs,ustart) %>%
+    base::rbind(items_covariance) %>%
+    dplyr::filter(op=="=~"|is.na(op)) %>%
+    dplyr::group_by(rhs) %>%
+    dplyr::add_tally() %>%
+    dplyr::filter(n==1) %>%
+    dplyr::ungroup()
+  
+  #Count number of items remaining per factor
+  remaining <- solo_items %>%
+    dplyr::group_by(lhs) %>%
+    dplyr::select(-n) %>%
+    dplyr::count() %>%
+    dplyr::ungroup() %>%
+    dplyr::full_join(num_items,by="lhs") %>% 
+    base::as.data.frame() %>%
+    `colnames<-`(c("lhs","Remaining","Original"))
+  
+  #Add in factor loadings, group by number of items per factor (>2 or 2)
+  #And sort factor loadings magnitude within group 
+  itemoptions <- solo_items %>%  
+    dplyr::full_join(remaining,by="lhs") %>% 
+    dplyr::mutate(priority=ifelse(Original>2 & Remaining !="NA","Three","Two")) %>% 
+    dplyr::group_by(priority) %>% 
+    dplyr::arrange(abs(ustart), .by_group=TRUE) %>% 
+    dplyr::ungroup() %>% 
+    dplyr::select(lhs,rhs,ustart,priority) %>% 
+    base::as.data.frame() %>%
+    dplyr::as_tibble() %>%
+    `colnames<-`(c("lhs","Item","Loading","Priority"))
+  
+  return(itemoptions)
+}
+```
+
+
+```{r multi_factor}
+#### Function for multi-factor misspecification (Cross-loading) ####
+
+multi_factor <- function(model){
+  
+  #read in the model
+  Mod <- utils::read.delim(model()$datapath, header = FALSE)   
+  Mod_C <- base::as.character(Mod$V1)
+  
+  #Lavaanify it - have lavaan tell us the parameters
+  lav_file <- lavaan::lavaanify(Mod_C, fixed.x=FALSE) %>%
+    dplyr::filter(.data$lhs != .data$rhs)
+  
+  num_fact <- number_factor(model()$datapath)
+  
+  itemoptions <- multi_factor_num(model()$datapath)
+  
+  crosses <- itemoptions %>% 
+    group_by(lhs) %>% 
+    slice_min(abs(Loading)) %>% 
+    ungroup() %>% 
+    arrange(Priority,abs(Loading)) %>% 
+    slice(1:(num_fact-1))
+  
+  #identify all factor names (again)
+  factors <- lav_file %>%
+    dplyr::filter(op=="=~") %>%
+    dplyr::select(lhs) %>%
+    base::unique()
+  
+  #Compute Coefficient H for each factor
+  Coef_H <- lavaan::lavaanify(Mod_C, fixed.x = FALSE) %>%
+    dplyr::filter(lhs != rhs) %>%
+    dplyr::filter(op == "=~") %>%
+    dplyr::mutate(L_Sq=ustart^2) %>%
+    dplyr::mutate(E_Var=1-L_Sq) %>%
+    dplyr::mutate(Div=L_Sq/E_Var) %>%
+    dplyr::group_by(lhs) %>%
+    dplyr::summarise(Sum=sum(Div)) %>%
+    dplyr::mutate(H=((1+(Sum^-1))^-1)) %>%
+    dplyr::select(-Sum) %>%
+    dplyr::arrange(-H) %>%
+    `colnames<-`(c("rhs","H"))
+
+  #isolate factors and factor correlations
+  factcor1 <- factors %>%
+    dplyr::mutate(type="Factor") %>%
+    dplyr::full_join(lav_file, by = "lhs") %>%
+    dplyr::mutate(type=recode(type, .missing ="Error Correlation")) %>%
+    dplyr::select(lhs,op,rhs,ustart,type) %>%
+    dplyr::filter(op=="~~" & type=="Factor")
+
+  #flip in reverse so we get a list of all factors in one column
+  factcor2 <- factors %>%
+    dplyr::mutate(type="Factor") %>%
+    dplyr::full_join(lav_file, by = "lhs") %>%
+    dplyr::select(lhs,op,rhs,ustart,type) %>%
+    dplyr::filter(op=="~~" & type=="Factor") %>%
+    `colnames<-`(c("rhs","op","lhs","ustart","type")) %>%
+    dplyr::select(lhs,op,rhs,ustart,type)
+  
+  #Isolate items
+  dup1 <- factcor1 %>%
+    dplyr::full_join(factcor2, by = c("lhs", "op", "rhs", "ustart", "type")) %>% 
+    dplyr::full_join(crosses,by="lhs") %>% 
+    dplyr::full_join(Coef_H,by="rhs") %>% 
+    dplyr::filter(Item != "NA") %>% 
+    dplyr::arrange(abs(Loading))
+  
+  dup2 <- factcor1 %>%
+    dplyr::full_join(factcor2, by = c("lhs", "op", "rhs", "ustart", "type")) %>% 
+    dplyr::full_join(crosses,by="lhs") %>% 
+    dplyr::full_join(Coef_H,by="rhs") %>% 
+    dplyr::filter(Item != "NA") %>% 
+    dplyr::arrange(abs(Loading))
+  
+  setup <- rbind(dup1,dup2) %>%  
+    mutate(lhs_1=lhs,
+           rhs_1=rhs,
+           f_min=pmin(lhs_1,rhs_1),
+           f_max=pmax(lhs_1,rhs_1)) %>% 
+    unite(facts,c("f_min","f_max")) %>% 
+    select(-lhs_1,-rhs_1) %>% 
+    distinct(lhs,op,rhs,ustart,type,Item,Loading,Priority,H,.keep_all = TRUE)
+  
+  setup_copy <- setup
+  
+  cleaned <- data.frame(matrix(nrow=0,ncol=10)) %>% 
+    `colnames<-`(names(setup)) %>% 
+    mutate_if(is.logical, as.character)
+  
+  for (i in unique(setup_copy$Item)){
+    cleaned[i,] <- setup_copy %>% 
+      filter(Item==i) %>% 
+      slice_max(H)
+    setup_copy <- anti_join(setup_copy,cleaned,by="facts")
+  }
+  
+  modinfo <- cleaned %>% 
+    mutate(operator="=~",
+           H=as.numeric(H),
+           Loading=as.numeric(Loading),
+           ustart=as.numeric(ustart)) %>% 
+    arrange(Priority,Loading,-H) 
+  
+  #Compute maximum allowable cross loading value
+  Cross_Loading <- modinfo %>% 
+    mutate(F1=ustart,
+           F1_Sq=F1^2,
+           L1=Loading,
+           L1_Sq=L1^2,
+           E=1-L1_Sq) %>% 
+    mutate(MaxAllow=((sqrt(((L1_Sq*F1_Sq)+E))-(L1*F1))*.95),
+           Final_Loading=pmin(Loading,MaxAllow),
+           times="*") %>% 
+    select(rhs,operator,Final_Loading,times,Item) %>% 
+    unite("V1",sep=" ")
+           
+  #return value to append to model statement
+  return(Cross_Loading)
+}
+```
+
+
+
+```{r misspecified_dgm}
+#### Function to create Misspecified DGM given the number of factors ####
+
+Misspecified_DGM_Multi <- eventReactive(input$go,{
+
+  mod <- multi_factor(model()$datapath) 
+  
+  #Get parameters for true dgm
+  Mods <- utils::read.delim(model()$datapath, header = FALSE)   
+  Mod_C <- base::as.character(Mods$V1)
+  
+  multi_mod <- lapply(seq(nrow(mod)), function(x) rbind(Mod_C,mod[seq_len(x), ,drop = FALSE]) %>%
+                        data.frame() %>% 
+                        pull(V1))
+  
+  return(multi_mod)
+
+})
+
+```
+```
+
+
+Multi-factor CFA
+=====================================  
+
+Row {.tabset}
+-----------------------------------------------------------------------
+
+### Results
+
+These are the dynamic model fit index cutoff values for your model:
+
+```{r}
+renderTable({
+  Table <- Misspecified_DGM_Multi()
+},
+    digits=3, align='c', rownames = TRUE, width="auto",
+    bordered = TRUE)
+```
+

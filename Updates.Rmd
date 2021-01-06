@@ -556,7 +556,7 @@ Row {.tabset}
 
 <div>
 ```{r instructions, out.width="75%"}
-include_graphics("Example2.png")
+include_graphics("Example3.png")
 ```
 </div>
 

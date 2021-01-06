@@ -7,6 +7,7 @@ library(tools)
 library(lemon)
 library(tibble)
 library(magrittr)
+library(purrr)
 
 #### Function for Number of Factors ####
 
@@ -321,7 +322,7 @@ hide_ov <- function(h){
 
 #Simulate misspecified data fit stats
 
-misspecified_model_fit <- function(model,n){
+misspecified_multi_cfa <- function(model,n){
 
   #Get clean model equation
   mod <- cleanmodel(model)
@@ -329,29 +330,38 @@ misspecified_model_fit <- function(model,n){
   #Get parameters for misspecified dgm
   misspec_dgm <- Misspecified_DGM(model)
 
-  #Create empty df to put fit stats in
-  misspec_fit <- data.frame(matrix(nrow=500,ncol=3))
-
   #Use max sample size of 10000
   n <- min(n,10000)
-
-  #Simulate data through loop 500 times
+  
+  #Set seed
   set.seed(649364)
-  for (i in 1:500){
-    misspec_data <- simstandard::sim_standardized(m=misspec_dgm,n = n,
-                                                  latent = FALSE,
-                                                  errors = FALSE)
-    misspec_cfa <- base::withCallingHandlers(
-      lavaan::cfa(model = mod, data = misspec_data, std.lv=TRUE), warning = hide_ov)
-    misspec_fits <- lavaan::fitMeasures(misspec_cfa, c("srmr","rmsea","cfi"))
-    misspec_fit[i,] <- misspec_fits
-  }
-  set.seed(NULL)
-
-  #Clean up data
-  misspec_fit_sum <- misspec_fit %>%
+  
+  #Simulate one large dataset  
+  all_data_misspec <- sim_standardized(m=misspec_dgm,n = n*500,
+                               latent = FALSE,
+                               errors = FALSE)
+  
+  #Create indicator to split into 500 datasets for 500 reps
+  rep_id_misspec <- rep(1:500,n)
+  
+  #Combine indicator with dataset
+  dat_rep_misspec <- cbind(all_data_misspec,rep_id_misspec)
+  
+  #Group and list
+  misspec_data <- dat_rep_misspec %>% 
+    group_by(rep_id_misspec) %>% 
+    nest() %>% 
+    as.list()
+  
+  #Run 500 cfa
+  misspec_cfa <- map(misspec_data$data,~cfa(model = mod, data=., std.lv=TRUE))
+  
+  #Extract fit stats from each rep (list) into a data frame and clean
+  misspec_fit_sum <- map_dfr(misspec_cfa,~fitMeasures(., c("srmr","rmsea","cfi"))) %>% 
     `colnames<-`(c("SRMR_M","RMSEA_M","CFI_M")) %>%
     dplyr::mutate(Type_M="Misspecified")
+
+  set.seed(NULL)
 
   return(misspec_fit_sum)
 
@@ -359,52 +369,62 @@ misspecified_model_fit <- function(model,n){
 
 #Simulate true data fit stats
 
-true_model_fit <- function(model,n){
+true_multi_cfa <- function(model,n){
 
   #Get clean model equation
   mod <- cleanmodel(model)
 
   #Get parameters for true dgm
   true_dgm <- model
-
-  #Create empty df to put fit stats in
-  true_fit <- data.frame(matrix(nrow=50,ncol=3))
-
+  
   #Use max sample size of 10000
   n <- min(n,10000)
-
-  #Simulate data through loop 500 times
+  
+  #Set Seed
   set.seed(326267)
-  for (i in 1:50){
-    true_data <- simstandard::sim_standardized(m=true_dgm,n = n,
-                                               latent = FALSE,
-                                               errors = FALSE)
-    true_cfa <- lavaan::cfa(model = mod, data = true_data, std.lv=TRUE)
-    true_fits <- lavaan::fitMeasures(true_cfa, c("srmr","rmsea","cfi"))
-    true_fit[i,] <- true_fits
-  }
-  set.seed(NULL)
+  
+  #Simulate one large dataset  
+  all_data_true <- sim_standardized(m=true_dgm,n = n*500,
+                                       latent = FALSE,
+                                       errors = FALSE)
+  
+  #Create indicator to split into 500 datasets for 500 reps
+  rep_id_true <- rep(1:500,n)
+  
+  #Combine indicator with dataset
+  dat_rep_true <- cbind(all_data_true,rep_id_true)
+  
+  #Group and list
+  true_data <- dat_rep_true %>% 
+    group_by(rep_id_true) %>% 
+    nest() %>% 
+    as.list()
+  
+  #Run 500 cfa
+  true_cfa <- map(true_data$data,~cfa(model = mod, data=., std.lv=TRUE))
+  
+  #Extract fit stats from each rep (list) into a data frame and clean
+  true_fit_sum <- map_dfr(true_cfa,~fitMeasures(., c("srmr","rmsea","cfi"))) %>% 
+    `colnames<-`(c("SRMR_M","RMSEA_M","CFI_M")) %>%
+    dplyr::mutate(Type_M="True")
 
-  #Clean up data
-  true_fit_sum <- true_fit %>%
-    `colnames<-`(c("SRMR_T","RMSEA_T","CFI_T")) %>%
-    dplyr::mutate(Type_T="True")
+  set.seed(NULL)
 
   return(true_fit_sum)
 
 }
 
 #Combine into one dataframe
-dynamic_fit <- function(model,n){
+dynamic_fit_multi <- function(model,n){
 
     #Use max sample size of 10000
   n <- min(n,10000)
 
   #Get fit stats for misspecified model
-  misspec_fit <- misspecified_model_fit(model,n)
+  misspec_fit <- misspecified_multi_cfa(model,n)
 
   #Get fit stats for correctly specified model
-  true_fit <- true_model_fit(model,n)
+  true_fit <- true_multi_cfa(model,n)
 
   #ifelse statements to produce final table
   Table <- base::cbind(misspec_fit,true_fit)
@@ -414,13 +434,15 @@ dynamic_fit <- function(model,n){
 }
 
 #Generate dynamic model fit index cutoffs and table
-#Need warning for text file
-#Need warning for non-standardized loadings
 
-cfaFit <- function(model,n){
+multiCFA <- function(model,n){
 
   if (unstandardized(model)>0){
-    stop("DF Error: Your model has loadings greater than or equal to 1 (an impossible value). Please use standardized loadings.")
+    stop("dynamic Error: Your model has loadings greater than or equal to 1 (an impossible value). Please use standardized loadings.")
+  }
+  
+  if (number_factor(model)<2){
+    stop("dynamic Error: You entered a single factor model. Use singleCFA().")
   }
 
   results <- dynamic_fit(model,n)

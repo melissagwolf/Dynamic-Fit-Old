@@ -7,6 +7,7 @@ library(tools)
 library(lemon)
 library(tibble)
 library(magrittr)
+library(purrr)
 
 #### Function for Number of Factors ####
 
@@ -39,6 +40,46 @@ unstandardized <- function(model){
     base::nrow()
 
   return(one_plus)
+}
+
+#### Function to create model statement without numbers from user model (for input) ####
+
+cleanmodel <- function(model){
+  
+  model %>%
+    lavaan::lavaanify(fixed.x = FALSE) %>%
+    dplyr::filter(.data$lhs != .data$rhs) %>%
+    dplyr::group_by(.data$lhs, .data$op) %>%
+    dplyr::summarise(rhs = paste(.data$rhs, collapse = " + ")) %>%
+    dplyr::arrange(dplyr::desc(.data$op)) %>%
+    tidyr::unite("l", .data$lhs, .data$op, .data$rhs, sep = " ") %>%
+    dplyr::pull(.data$l)
+  
+}
+
+#### Function to compute DF to know how many misspecifications we can add ####
+
+defre <- function(model,n){
+  
+  #Get clean model equation
+  mod <- cleanmodel(model)
+  
+  #Get parameters for true dgm
+  true_dgm <- model
+  
+  #Run one simulation
+  dat <- simstandard::sim_standardized(true_dgm,n=n,latent=FALSE,errors=FALSE)
+  fit <- lavaan::cfa(model=mod,data=dat,std.lv=TRUE)
+  
+  #Number of freely estimated paths
+  paths <- max(lavaan::parTable(fit)$free)
+  
+  #Number of unique values in input matrix
+  parms <- nrow(lavaan::lavInspect(fit,"std.lv")$theta)
+  tot.parms <- (parms*(1+parms))/2
+  
+  #Subtract
+  return(tot.parms-paths)
 }
 
 #### Function for Single Factor Misspecification (Correlation) ####
@@ -177,51 +218,34 @@ multi_factor <- function(model){
     dplyr::select(-n) %>%
     dplyr::count() %>%
     dplyr::ungroup() %>%
+    dplyr::full_join(num_items,by="lhs") %>% 
     base::as.data.frame() %>%
-    `colnames<-`(c("lhs","Remaining"))
+    `colnames<-`(c("lhs","Remaining","Original"))
 
-  #Figure out which items are ideally eligible for cross-loading misspecification
-  eligible <- remaining %>%
-    dplyr::full_join(num_items,by="lhs") %>%
-    dplyr::filter(Original>2 & Remaining != "NA") %>%
-    dplyr::mutate(Eligible=1) %>%
-    dplyr::select(lhs,Eligible)
 
-  #Compute number that are ideally eligible
-  Num_Eligible <- base::nrow(eligible)
-
-  #Identify item and factor with lowest loading (that doesn't have an existing error cov)
-  #We prefer to select a factor with 3+ items for identification purposes
-  #If there is an eligible factor with at least 3 items, pick the lowest loading from one of those
-  #If there isn't, then you can still proceed
-  if(Num_Eligible>0){
-    crosses <- solo_items %>%
-      dplyr::filter(op=="=~") %>%
-      dplyr::select(lhs,op,rhs,ustart) %>%
-      dplyr::group_by(rhs) %>%                   #this is where we remove
-      dplyr::add_tally() %>%                     #any items that load on
-      dplyr::filter(n==1) %>%                    #more than one factor
-      dplyr::full_join(eligible,by="lhs") %>%    #add factor eligibility status
-      dplyr::filter(Eligible == 1) %>%           #select only factors that are eligible
-      dplyr::arrange(abs(ustart)) %>%            #choose the lowest loading item
-      base::as.data.frame() %>%                  #from a factor with more than 2 items
-      dplyr::slice(1) %>%
-      dplyr::select(-n,-op, -Eligible) %>%
-      dplyr::as_tibble() %>%
-      `colnames<-`(c("Factor","Item","Loading"))
-  } else {
-    crosses <- solo_items %>%
-      dplyr::filter(op=="=~") %>%
-      dplyr::select(lhs,op,rhs,ustart) %>%
-      dplyr::group_by(rhs) %>%                   #this is where we remove
-      dplyr::add_tally() %>%                     #any items that load on
-      dplyr::filter(n==1) %>%                    #more than one factor
-      dplyr::arrange(abs(ustart)) %>%            #choose the lowest loading item
-      base::as.data.frame() %>%                 #from any factor
-      dplyr::slice(1) %>%
-      dplyr::select(-n,-op) %>%
-      dplyr::as_tibble() %>%
-      `colnames<-`(c("Factor","Item","Loading"))
+  #Add in factor loadings, group by number of items per factor (>2 or 2)
+  #And sort factor loadings magnitude within group 
+  itemoptions <- solo_items %>%  
+    dplyr::full_join(remaining,by="lhs") %>% 
+    dplyr::mutate(priority=ifelse(Original>2 & Remaining !="NA","Three","Two")) %>% 
+    dplyr::group_by(priority) %>% 
+    dplyr::arrange(abs(ustart), .by_group=TRUE) %>% 
+    dplyr::ungroup() %>% 
+    dplyr::select(lhs,rhs,ustart,priority) %>% 
+    base::as.data.frame() %>%
+    dplyr::as_tibble() %>%
+    `colnames<-`(c("lhs","Item","Loading","Priority"))
+  
+  #Identify lowest loadings for severity of misspecification
+  if(defre(model,n)>2){
+    crosses <- itemoptions %>% 
+      slice(1:3)
+  }else if(defre(model,n)>1){
+    crosses <- itemoptions %>% 
+      slice(1:2)
+  }else if(defre(model,n)>0){
+    crosses <- itemoptions %>% 
+      slice(1)
   }
 
   #isolate factors and factor correlations
@@ -243,13 +267,16 @@ multi_factor <- function(model){
 
   #combine and clean
   modinfo <- factcor1 %>%
-    dplyr::full_join(factcor2, by = c("lhs", "op", "rhs", "ustart", "type")) %>%
-    base::cbind(crosses) %>%
-    dplyr::full_join(Coef_H,by="rhs") %>%
-    dplyr::filter(lhs == Factor) %>%
-    dplyr::arrange(-H) %>%
-    dplyr::slice(1) %>%
-    dplyr::mutate(operator="=~")
+    dplyr::full_join(factcor2, by = c("lhs", "op", "rhs", "ustart", "type")) %>% 
+    dplyr::full_join(crosses,by="lhs") %>% 
+    dplyr::full_join(Coef_H,by="rhs") %>% 
+    dplyr::filter(Item != "NA") %>% 
+    dplyr::group_by(Item) %>% 
+    dplyr::arrange(-H, .by_group=TRUE) %>% 
+    dplyr::slice(1, .preserve = TRUE) %>% 
+    dplyr::ungroup() %>% 
+    dplyr::mutate(operator="=~") %>% 
+    dplyr::arrange(Priority,Loading)
 
   #Compute maximum allowable cross loading value
   F1 <- modinfo$ustart
@@ -260,7 +287,7 @@ multi_factor <- function(model){
   MaxAllow <- ((sqrt((L1_Sq*F1_Sq)+E)-(L1*F1))*.95)
 
   #extract value of loading
-  Final_Loading <- round(min(L1,MaxAllow),4)
+  Final_Loading <- round(apply(cbind(L1,MaxAllow),1,FUN=min),4)
 
   #Create model DF
   Cross_Loading <- modinfo %>%
@@ -276,37 +303,58 @@ multi_factor <- function(model){
 
 #### Function to create Misspecified DGM given the number of factors ####
 
-Misspecified_DGM <- function(model){
+### Need to add in different levels**
 
-  factor <- number_factor(model)
+Misspecified_DGM_Multi <- function(model){
 
-  if (factor > 1){
-    multi <- multi_factor(model)
-    multi_mod <- base::rbind(model,multi)
-    multi_mod_c <- multi_mod$V1
-    return(multi_mod_c)
-
-  } else{
-    single <- single_factor(model)
-    single_mod <- base::rbind(model,single)
-    single_mod_c <- single_mod$V1
-    return(single_mod_c)
+  if(defre(model,n)>2){
+    L1 <- multi_factor(model)[1,] %>% 
+      data.frame() %>% 
+      `colnames<-`(c("V1")) 
+    L2 <- multi_factor(model)[2,] %>% 
+      data.frame() %>% 
+      `colnames<-`(c("V1")) 
+    L3 <- multi_factor(model)[3,] %>% 
+      data.frame() %>% 
+      `colnames<-`(c("V1")) 
+    
+    L1_misspec <- rbind(model,L1)
+    L2_misspec <- rbind(model,L1,L2)
+    L3_misspec <- rbind(model,L1,L2,L3)
+    
+    L1_misspec_c <- L1_misspec$V1
+    L2_misspec_c <- L2_misspec$V1
+    L3_misspec_c <- L3_misspec$V1
+    
+    multi_mod <- list(L1_misspec_c,L2_misspec_c,L3_misspec_c)
+  }else if(defre(model,n)>1){
+    L1 <- multi_factor(model)[1,] %>% 
+      data.frame() %>% 
+      `colnames<-`(c("V1")) 
+    L2 <- multi_factor(model)[2,] %>% 
+      data.frame() %>% 
+      `colnames<-`(c("V1")) 
+    
+    L1_misspec <- rbind(model,L1)
+    L2_misspec <- rbind(model,L1,L2)
+    
+    L1_misspec_c <- L1_misspec$V1
+    L2_misspec_c <- L2_misspec$V1
+    
+    multi_mod <- list(L1_misspec_c,L2_misspec_c)
+  }else if(defre(model,n)>0){
+    L1 <- multi_factor(model)[1,] %>% 
+      data.frame() %>% 
+      `colnames<-`(c("V1"))
+    
+    L1_misspec <- rbind(model,L1)
+    
+    L1_misspec_c <- L1_misspec$V1
+    
+    multi_mod <- list(L1_misspec_c)
   }
-
-}
-
-#### Function to create model statement without numbers from user model (for input) ####
-
-cleanmodel <- function(model){
-
-  model %>%
-    lavaan::lavaanify(fixed.x = FALSE) %>%
-    dplyr::filter(.data$lhs != .data$rhs) %>%
-    dplyr::group_by(.data$lhs, .data$op) %>%
-    dplyr::summarise(rhs = paste(.data$rhs, collapse = " + ")) %>%
-    dplyr::arrange(dplyr::desc(.data$op)) %>%
-    tidyr::unite("l", .data$lhs, .data$op, .data$rhs, sep = " ") %>%
-    dplyr::pull(.data$l)
+  
+  return(multi_mod)
 
 }
 
@@ -321,43 +369,57 @@ hide_ov <- function(h){
 
 #Simulate misspecified data fit stats
 
+#Gonna need if/else statements here, too
+
 misspecified_model_fit <- function(model,n){
 
   #Get clean model equation
   mod <- cleanmodel(model)
 
   #Get parameters for misspecified dgm
-  misspec_dgm <- Misspecified_DGM(model)
-
-  #Create empty df to put fit stats in
-  misspec_fit <- data.frame(matrix(nrow=500,ncol=3))
+  misspec_dgm <- Misspecified_DGM_Multi(model)
 
   #Use max sample size of 10000
   n <- min(n,10000)
-
-  #Simulate data through loop 500 times
+  
+  #Set seed
   set.seed(649364)
-  for (i in 1:500){
-    misspec_data <- simstandard::sim_standardized(m=misspec_dgm,n = n,
-                                                  latent = FALSE,
-                                                  errors = FALSE)
-    misspec_cfa <- base::withCallingHandlers(
-      lavaan::cfa(model = mod, data = misspec_data, std.lv=TRUE), warning = hide_ov)
-    misspec_fits <- lavaan::fitMeasures(misspec_cfa, c("srmr","rmsea","cfi"))
-    misspec_fit[i,] <- misspec_fits
-  }
-  set.seed(NULL)
+  
+  #Simulate one large dataset for each misspecification
+  all_data_misspec <- map(misspec_dgm,~sim_standardized(m=.,n=n*500,
+                                                        latent=FALSE,errors=FALSE))
+  
+  #Create indicator to split into 500 datasets for 500 reps
+  rep_id_misspec <- rep(1:500,n)
+  
+  #Combine indicator with dataset
+  dat_rep_misspec <- map(all_data_misspec,~cbind(.,rep_id_misspec))
+  
+  #Group and list
+  misspec_data <- map(dat_rep_misspec,~group_by(.,rep_id_misspec) %>% 
+                        nest())
+  
+  #Grab data level of the list
+  data <- map(misspec_data,2)
+  
+  #Run 500 cfa
+  misspec_cfa <- base::withCallingHandlers(map(data, function(x) map(x, function(y) 
+    cfa(model = mod, data=y, std.lv=TRUE))), warning = hide_ov)
+  
+  #Extract fit stats from each rep (list) into a data frame and clean
+  misspec_fit_sum <- map(misspec_cfa, function(x) map_dfr(x, function(y) fitMeasures(y, c("srmr","rmsea","cfi"))) %>% 
+                           `colnames<-`(c("SRMR_M","RMSEA_M","CFI_M")) %>%
+                           dplyr::mutate(Type_M="Misspecified"))
 
-  #Clean up data
-  misspec_fit_sum <- misspec_fit %>%
-    `colnames<-`(c("SRMR_M","RMSEA_M","CFI_M")) %>%
-    dplyr::mutate(Type_M="Misspecified")
+  set.seed(NULL)
 
   return(misspec_fit_sum)
 
 }
 
 #Simulate true data fit stats
+
+#Gonna need if/else statements here, too
 
 true_model_fit <- function(model,n){
 
@@ -366,29 +428,39 @@ true_model_fit <- function(model,n){
 
   #Get parameters for true dgm
   true_dgm <- model
-
-  #Create empty df to put fit stats in
-  true_fit <- data.frame(matrix(nrow=50,ncol=3))
-
+  
   #Use max sample size of 10000
   n <- min(n,10000)
-
-  #Simulate data through loop 500 times
+  
+  #Set Seed
   set.seed(326267)
-  for (i in 1:50){
-    true_data <- simstandard::sim_standardized(m=true_dgm,n = n,
-                                               latent = FALSE,
-                                               errors = FALSE)
-    true_cfa <- lavaan::cfa(model = mod, data = true_data, std.lv=TRUE)
-    true_fits <- lavaan::fitMeasures(true_cfa, c("srmr","rmsea","cfi"))
-    true_fit[i,] <- true_fits
-  }
-  set.seed(NULL)
+  
+  #Simulate one large dataset  
+  all_data_true <- sim_standardized(m=true_dgm,n = n*500,
+                                       latent = FALSE,
+                                       errors = FALSE)
+  
+  #Create indicator to split into 500 datasets for 500 reps
+  rep_id_true <- rep(1:500,n)
+  
+  #Combine indicator with dataset
+  dat_rep_true <- cbind(all_data_true,rep_id_true)
+  
+  #Group and list
+  true_data <- dat_rep_true %>% 
+    group_by(rep_id_true) %>% 
+    nest() %>% 
+    as.list()
+  
+  #Run 500 cfa
+  true_cfa <- map(true_data$data,~cfa(model = mod, data=., std.lv=TRUE))
+  
+  #Extract fit stats from each rep (list) into a data frame and clean
+  true_fit_sum <- map_dfr(true_cfa,~fitMeasures(., c("srmr","rmsea","cfi"))) %>% 
+    `colnames<-`(c("SRMR_M","RMSEA_M","CFI_M")) %>%
+    dplyr::mutate(Type_M="True")
 
-  #Clean up data
-  true_fit_sum <- true_fit %>%
-    `colnames<-`(c("SRMR_T","RMSEA_T","CFI_T")) %>%
-    dplyr::mutate(Type_T="True")
+  set.seed(NULL)
 
   return(true_fit_sum)
 
@@ -397,7 +469,9 @@ true_model_fit <- function(model,n){
 #Combine into one dataframe
 dynamic_fit <- function(model,n){
 
-    #Use max sample size of 10000
+  #Probably need some sort of grouping statement
+  
+  #Use max sample size of 10000
   n <- min(n,10000)
 
   #Get fit stats for misspecified model
@@ -406,8 +480,15 @@ dynamic_fit <- function(model,n){
   #Get fit stats for correctly specified model
   true_fit <- true_model_fit(model,n)
 
-  #ifelse statements to produce final table
-  Table <- base::cbind(misspec_fit,true_fit)
+  #Create groups
+  levels <- rep(1:3,each=500)
+  
+  #Produce final table by level
+  Table <- map_dfr(misspec_fit,~cbind(.,true_fit)) %>% 
+    cbind(levels) %>% 
+    `colnames<-`(c("SRMR_M","RMSEA_M","CFI_M","Type_M",
+                    "SRMR_T","RMSEA_T","CFI_T","Type_T",
+                    "levels"))
 
   #Final table
   return(Table)
@@ -417,23 +498,35 @@ dynamic_fit <- function(model,n){
 #Need warning for text file
 #Need warning for non-standardized loadings
 
-cfaFit <- function(model,n){
+multiCFA <- function(model,n){
+  
+  #Probably need some sort of grouping statement
+  #Gonna need if/else statements here, too
 
   if (unstandardized(model)>0){
-    stop("DF Error: Your model has loadings greater than or equal to 1 (an impossible value). Please use standardized loadings.")
+    stop("dynamic Error: Your model has loadings greater than or equal to 1 (an impossible value). Please use standardized loadings.")
+  }
+  
+  if (number_factor(model)<2){
+    stop("dynamic Error: You entered a single factor model. Use singleCFA.")
   }
 
-  results <- dynamic_fit(model,n)
+  system.time(results <- dynamic_fit(model,n))
 
   misspec_sum <- results %>%
+    dplyr::group_by(levels) %>% 
     dplyr::summarise(SRMR_M=quantile(SRMR_M, c(.05,.1)),
                      RMSEA_M=quantile(RMSEA_M, c(.05,.1)),
-                     CFI_M=quantile(CFI_M, c(.95,.9)))
+                     CFI_M=quantile(CFI_M, c(.95,.9))) %>% 
+    ungroup()
 
   true_sum <- results %>%
+    dplyr::group_by(levels) %>% 
     dplyr::summarise(SRMR_T=quantile(SRMR_T, c(.95,.9)),
                      RMSEA_T=quantile(RMSEA_T, c(.95,.9)),
-                     CFI_T=quantile(CFI_T, c(.05,.1)))
+                     CFI_T=quantile(CFI_T, c(.05,.1))) %>% 
+    ungroup() %>% 
+    select(-levels)
 
   Table <- cbind(misspec_sum,true_sum) %>%
     dplyr::mutate(SRMR_R=base::round(SRMR_M,3),
@@ -443,6 +536,7 @@ cfaFit <- function(model,n){
                   RMSEA=base::ifelse(RMSEA_T<RMSEA_M,RMSEA_R,"NONE"),
                   CFI=base::ifelse(CFI_T>CFI_M,CFI_R,"NONE")) %>%
     dplyr::select(SRMR,RMSEA,CFI)
+
 
   T_R1 <- Table %>%
     dplyr::slice(1) %>%

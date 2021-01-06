@@ -23,6 +23,7 @@ library(tools)
 #library(patchwork)
 library(shinybusy)
 library(lemon)
+library(purrr)
 #library(shinycssloaders)
 
 #List aesthetics first
@@ -39,7 +40,7 @@ body {
 <!-- Search Engine Optimization -->
 <html>
 <head>
-<title>Dynamic Fit Index Cutoffs for CFA Models</title>
+<title>Dynamic Fit Index Cutoffs for Multifactor CFA Models</title>
 
 <meta name="description" content="Derive dynamic fit index cutoffs that are adaptively tailored to the specific factor model and data being evaluated."/>
 </head>
@@ -65,7 +66,7 @@ options(shiny.sanitize.errors = FALSE)
 Sidebar {.sidebar}
 =====================================
 
-This app uses Monte Carlo simulations to generate dynamic fit index cutoffs for factor models.
+This app uses Monte Carlo simulations to generate dynamic fit index cutoffs for multifactor CFA models.
 
 \  
 
@@ -132,84 +133,6 @@ unstandardized <- function(model){
   return(one_plus)
 }
 
-```
-
-```{r single_factor}
-#### Function for Single Factor Misspecification (Correlation) ####
-
-single_factor <- function(model){
-  
-  #Read in model in text file
-  Mod <- utils::read.delim(model()$datapath, header = FALSE)   
-  
-  #Convert to character for manipulation
-  Mod_C <- base::as.character(Mod$V1)                             
-  
-  #Lavaanify it - have lavaan tell us the parameters
-  lav_file <- lavaan::lavaanify(Mod_C, fixed.x=FALSE) %>%   
-    dplyr::filter(.data$lhs != .data$rhs)    
-  
-  #identify the factor name
-  factors <- lav_file %>%                    
-    dplyr::filter(op=="=~") %>%            
-    dplyr::select(lhs) %>%                 
-    base::unique()                        
-  
-  #Identify any items that already have an error covariance
-  items_covariance <- factors %>% 
-    dplyr::mutate(type="Factor") %>%            
-    dplyr::full_join(lav_file, by = "lhs") %>%              
-    dplyr::select(-type,type) %>%               
-    dplyr::select(lhs,op,rhs,type) %>%          
-    dplyr::filter(op=="=~" | is.na(type)) %>%   
-    dplyr::filter(is.na(type)) %>%              
-    dplyr::select(-type) %>%                    
-    tidyr::pivot_longer(-op,names_to = "test", values_to = "rhs") %>%  
-    dplyr::select(-op,-test) %>%               
-    dplyr::mutate(lhs=NA,op=NA,ustart=NA)      
-  
-  #Isolate the items that do not already have an error covariance
-  solo_items <- lav_file %>% 
-    dplyr::select(lhs,op,rhs,ustart) %>%    
-    base::rbind(items_covariance) %>%      
-    dplyr::filter(op=="=~"|is.na(op)) %>%   
-    dplyr::group_by(rhs) %>%                
-    dplyr::add_tally() %>%                  
-    dplyr::filter(n==1) %>%                 
-    dplyr::ungroup() 
-  
-  #Select the item with the lowest loading
-  lowest1 <- solo_items %>% 
-    dplyr::arrange(abs(ustart)) %>% 
-    dplyr::slice(1)
-  
-  #Select the item with the second lowest loading
-  lowest2 <- solo_items %>% 
-    dplyr::arrange(abs(ustart)) %>% 
-    dplyr::slice(2) %>% 
-    `colnames<-`(c("lhs2","op2","rhs2","ustart2","n2"))
-  
-  #Compute the model implied residual correlation (simstandard)
-  U1 <- lowest1$ustart
-  U2 <- lowest2$ustart2
-  Cor <- U1*U2
-  #U1E <- (1-(U1^2))              #for dg by lavaan
-  #U2E <- (1-(U2^2))
-  #Cov <- Cor*sqrt(U1E*U2E)
-  
-  #Create model DF
-  Residual_Correlation <- Cor %>%
-    base::as.data.frame() %>%
-    `colnames<-`("Cor") %>%
-    dplyr::mutate(Cor=round(Cor,4)) %>% 
-    base::cbind(lowest1,lowest2) %>% 
-    dplyr::mutate(operator="~~") %>% 
-    dplyr::mutate(times="*") %>% 
-    dplyr::select(rhs,operator,Cor,times,rhs2) %>% 
-    tidyr::unite("V1",sep=" ")
-  
-  return(Residual_Correlation)
-}
 ```
 
 ```{r multi_factor}
@@ -325,7 +248,7 @@ multi_factor <- function(model){
       dplyr::add_tally() %>%                     #any items that load on
       dplyr::filter(n==1) %>%                    #more than one factor
       dplyr::arrange(abs(ustart)) %>%            #choose the lowest loading item
-      base::as.data.frame() %>%                 #from any factor
+      base::as.data.frame() %>%                  #from any factor
       dplyr::slice(1) %>%                        
       dplyr::select(-n,-op) %>%              
       dplyr::as_tibble() %>%                 
@@ -384,26 +307,18 @@ multi_factor <- function(model){
 ```
 
 ```{r misspecified_dgm}
-#### Function to create Misspecified DGM given the number of factors ####
+#### Function to create Misspecified DGM for multifactor CFA ####
 
 Misspecified_DGM <- function(model){
   
   factor <- number_factor(model()$datapath)
   mod <- utils::read.delim(model()$datapath,header=FALSE)
 
-  if (factor > 1){
-    multi <- multi_factor(model()$datapath)
-    multi_mod <- base::rbind(mod,multi)
-    multi_mod_c <- multi_mod$V1
-    return(multi_mod_c)
+  multi <- multi_factor(model()$datapath)
+  multi_mod <- base::rbind(mod,multi)
+  multi_mod_c <- multi_mod$V1
+  return(multi_mod_c)
     
-  } else{
-    single <- single_factor(model()$datapath)
-    single_mod <- base::rbind(mod,single)
-    single_mod_c <- single_mod$V1
-    return(single_mod_c)
-  }
-  
 }
 ```
 
@@ -541,7 +456,7 @@ dynamic_fit <- eventReactive(input$go,{
 ```
 
 
-Single Level CFA
+Multifactor CFA
 =====================================  
 
 Row {.tabset}
@@ -566,11 +481,11 @@ Row {.tabset}
 
 <div>
 ```{r instructions, out.width="65%"}
-include_graphics("Example_Single.png")
+#include_graphics("Example3.png")
 ```
 </div>
 
-**Note**: These cutoff values are currently only accurate for single level cfa models.  Any cutoff values produced for bi-factor models or higher-order models are inaccurate (you will likely get an error message if you try to compute them).
+**Note**: These cutoff values are currently only accurate for single level multifactor cfa models.  Any cutoff values produced for bi-factor models or higher-order models are inaccurate (you will likely get an error message if you try to compute them).
 
 <div>
 ```{r progress1}
@@ -578,6 +493,19 @@ include_graphics("Example_Single.png")
 #Ignore
 
 renderTable({
+  
+  shiny::validate(
+          shiny::need(tools::file_ext(model()$name) %in% 
+                 c('text','.txt','txt'),
+               "You must enter a text file (.txt)"))
+
+  shiny::validate(
+    shiny::need(unstandardized(model()$datapath)==0,
+    "One of your loadings or correlations has a value of 1 or above (an impossible value). You must use standardized loadings."))
+  
+  shiny::validate(
+    shiny::need(number_factor(model()$datapath)>1,
+    "You entered a single factor model. Go back to the landing page and select the single factor model application."))  
   
   invisible(dynamic_fit() %>% 
     filter(SRMR_T==0))
@@ -603,6 +531,10 @@ renderTable({
   shiny::validate(
     shiny::need(unstandardized(model()$datapath)==0,
     "One of your loadings or correlations has a value of 1 or above (an impossible value). You must use standardized loadings."))
+  
+  shiny::validate(
+    shiny::need(number_factor(model()$datapath)>1,
+    "You entered a single factor model. Go back to the landing page and select the single factor model application."))  
     
   misspec_sum <- dynamic_fit() %>%  
     dplyr::summarise(SRMR_M=quantile(SRMR_M, c(.05,.1)),
@@ -678,6 +610,10 @@ renderPlot({
     shiny::need(unstandardized(model()$datapath)==0,
     "One of your loadings or correlations has a value of 1 or above (an impossible
     value). You must use standardized loadings."))
+  
+  shiny::validate(
+    shiny::need(number_factor(model()$datapath)>1,
+    "You entered a single factor model. Go back to the landing page and select the single factor model application."))  
   
   Misspec_dat <- dynamic_fit() %>% 
     dplyr::select(SRMR_M:Type_M) %>% 
@@ -844,6 +780,19 @@ This app began as a project in a graduate course taught by [Allison Horst](https
 #Ignore
 
 renderPlot({
+  
+  shiny::validate(
+          shiny::need(tools::file_ext(model()$name) %in% 
+                 c('text','.txt','txt'),
+               "You must enter a text file (.txt)"))
+
+  shiny::validate(
+    shiny::need(unstandardized(model()$datapath)==0,
+    "One of your loadings or correlations has a value of 1 or above (an impossible value). You must use standardized loadings."))
+  
+  shiny::validate(
+    shiny::need(number_factor(model()$datapath)>1,
+    "You entered a single factor model. Go back to the landing page and select the single factor model application."))  
   
   invisible(dynamic_fit() %>% 
     filter(SRMR_T==0))

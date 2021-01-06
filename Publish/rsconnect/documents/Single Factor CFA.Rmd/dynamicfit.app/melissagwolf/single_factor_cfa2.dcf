@@ -1,12 +1,12 @@
-name: updates
-title:
+name: single_factor_cfa2
+title: Single Factor CFA
 username: melissagwolf
 account: melissagwolf
 server: dynamicfit.app
 hostUrl: https://dynamicfit.app/__api__
-appId: 1
-bundleId: 14
-url: https://dynamicfit.app/cfa/
-when: 1594799363.13665
+appId: 5
+bundleId: 19
+url: https://dynamicfit.app/content/5/
+when: 1609743058.09947
 asMultiple: FALSE
 asStatic: FALSE

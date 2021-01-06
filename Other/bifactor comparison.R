@@ -67,32 +67,32 @@ rbind(true,misspec)
 
 ###########
 
-bt <- as.data.frame(matrix(nrow=200,ncol=3))
+bt <- as.data.frame(matrix(nrow=200,ncol=6))
 for(i in 1:200){
         dfbi <- sim_standardized(bimod, n=1000, latent = FALSE, errors = FALSE)
         bifit <- sem(bimod2, dfbi, std.lv=TRUE)
-        bt[i,] <- fitMeasures(bifit, fit.measures = c("SRMR", "RMSEA", "CFI"))
+        bt[i,] <- fitMeasures(bifit, fit.measures = c("chisq", "df", "pvalue", "SRMR", "RMSEA", "CFI"))
 }
 
-bm <- as.data.frame(matrix(nrow=200,ncol=3))
+bm <- as.data.frame(matrix(nrow=200,ncol=6))
 for(i in 1:200){
         dfbi <- sim_standardized(bimod, n=1000, latent = FALSE, errors = FALSE)
         bifit_cf <- sem(cfmod2, dfbi, std.lv=TRUE)
-        bm[i,] <- fitMeasures(bifit_cf, fit.measures = c("SRMR", "RMSEA", "CFI"))
+        bm[i,] <- fitMeasures(bifit_cf, fit.measures = c("chisq", "df", "pvalue", "SRMR", "RMSEA", "CFI"))
 }
 
-ct <- as.data.frame(matrix(nrow=200,ncol=3))
+ct <- as.data.frame(matrix(nrow=200,ncol=6))
 for(i in 1:200){
         dfcf <- sim_standardized(cfmod, n=1000, latent = FALSE, errors = FALSE)
         cffit <- sem(cfmod2, dfcf, std.lv=TRUE)
-        ct[i,] <- fitMeasures(cffit, fit.measures = c("SRMR", "RMSEA", "CFI"))
+        ct[i,] <- fitMeasures(cffit, fit.measures = c("chisq", "df", "pvalue", "SRMR", "RMSEA", "CFI"))
 }
 
-cm <- as.data.frame(matrix(nrow=200,ncol=3))
+cm <- as.data.frame(matrix(nrow=200,ncol=6))
 for(i in 1:200){
         dfcf <- sim_standardized(cfmod, n=1000, latent = FALSE, errors = FALSE)
         cffit_bi <- sem(bimod2, dfcf, std.lv=TRUE)
-        cm[i,] <- fitMeasures(cffit_bi, fit.measures = c("SRMR", "RMSEA", "CFI"))
+        cm[i,] <- fitMeasures(cffit_bi, fit.measures = c("chisq", "df", "pvalue", "SRMR", "RMSEA", "CFI"))
 }
 
 btm <- round(colMeans(bt),3)
