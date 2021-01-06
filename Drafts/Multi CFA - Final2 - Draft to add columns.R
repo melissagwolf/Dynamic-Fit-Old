@@ -310,8 +310,6 @@ multi_factor <- function(model){
   return(Cross_Loading)
 }
 
-multi_factor(model)
-
 #### Function to create Misspecified DGM given the number of factors ####
 
 ### Need to add in different levels**
@@ -529,9 +527,56 @@ multiCFA <- function(model,n){
   
   Table_C$cut <- rep(c("95/5","90/10"))
   
-  Final_Table <- Table_C %>% 
+  m_info <- multi_factor(model)
+  
+  add <- m_info %>% 
+    tidyr::separate(V1, into=c("a","b","c","d","e"), sep=" ") %>% 
+    dplyr::select(c) %>% 
+    dplyr::mutate(Magnitude=stringr::str_replace_all(c,"0\\.","."),
+                  Omitted=dplyr::row_number()) %>% 
+    dplyr::select(Omitted,Magnitude) %>% 
+    dplyr::slice(rep(1:n(), each=2)) %>% 
+    cbind(Table_C)
+  
+  Final_Table <- add %>% 
     unite(Cut,levelnum,cut,sep=": ") %>% 
     column_to_rownames(var='Cut') 
+  
+  add <- m_info %>% 
+    tidyr::separate(V1, into=c("a","b","c","d","e"), sep=" ") %>% 
+    dplyr::select(c) %>% 
+    dplyr::mutate("Magnitude of Omitted Loading"=stringr::str_replace_all(c,"0\\.","."),
+                  "Additional Paths in DGM"=dplyr::row_number(),
+                  "Level"=paste("Level",row_number())) %>% 
+    dplyr::select("Level","Additional Paths in DGM","Magnitude of Omitted Loading") %>% 
+    column_to_rownames(var="Level")
+  add
+  
+  m_info %>% 
+    tidyr::separate(V1, into=c("a","b","c","d","e"), sep=" ") %>% 
+    dplyr::select(c) %>% 
+    dplyr::mutate(test=stringr::str_replace_all(c,"0\\.","."),
+                  "Magnitude of Omitted Loading"=as.character(test),
+                  "Additional Paths in DGM"=dplyr::row_number(),
+                  "Level"=paste("Level",row_number())) %>% 
+    dplyr::select("Level","Additional Paths in DGM","Magnitude of Omitted Loading") %>% 
+    column_to_rownames(var="Level")
+  
+  m_info %>% 
+    tidyr::separate(V1, into=c("a","b","c","d","e"), sep=" ") %>% 
+    dplyr::select(c) %>% 
+    dplyr::mutate(test=stringr::str_replace_all(c,"0\\.","."),
+                  test2=round(test,digits=3),
+                  "Magnitude of Omitted Loading"=as.character(test2),
+                  "Additional Paths in DGM"=dplyr::row_number(),
+                  "Level"=paste("Level",row_number())) %>% 
+    dplyr::select("Level","Additional Paths in DGM","Magnitude of Omitted Loading") %>% 
+    column_to_rownames(var="Level")
+  
+  test <- m_info %>% 
+    tidyr::separate(V1, into=c("a","b","c","d","e"), sep=" ")
+  
+  class(add$`Magnitude of Omitted Loading`)
   
   ##Plots
   
