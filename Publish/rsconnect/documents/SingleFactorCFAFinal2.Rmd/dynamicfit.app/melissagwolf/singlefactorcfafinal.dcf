@@ -5,8 +5,8 @@ account: melissagwolf
 server: dynamicfit.app
 hostUrl: https://dynamicfit.app/__api__
 appId: 10
-bundleId: 53
+bundleId: 65
 url: https://dynamicfit.app/onefactor/
-when: 1610003823.51062
+when: 1611531261.30321
 asMultiple: FALSE
 asStatic: FALSE
