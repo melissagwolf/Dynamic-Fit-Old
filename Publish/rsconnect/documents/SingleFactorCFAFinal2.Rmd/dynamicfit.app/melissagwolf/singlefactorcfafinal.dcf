@@ -1,12 +1,12 @@
-name: multifactorcfafinal
+name: singlefactorcfafinal
 title:
 username: melissagwolf
 account: melissagwolf
 server: dynamicfit.app
 hostUrl: https://dynamicfit.app/__api__
-appId: 12
-bundleId: 52
-url: https://dynamicfit.app/multifactor/
-when: 1610003697.3037
+appId: 10
+bundleId: 53
+url: https://dynamicfit.app/onefactor/
+when: 1610003823.51062
 asMultiple: FALSE
 asStatic: FALSE

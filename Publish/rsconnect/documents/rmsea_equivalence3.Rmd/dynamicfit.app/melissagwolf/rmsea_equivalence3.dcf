@@ -1,12 +1,12 @@
-name: multifactorcfafinal
-title:
+name: rmsea_equivalence3
+title: rmsea_equivalence3
 username: melissagwolf
 account: melissagwolf
 server: dynamicfit.app
 hostUrl: https://dynamicfit.app/__api__
-appId: 12
-bundleId: 52
-url: https://dynamicfit.app/multifactor/
-when: 1610003697.3037
+appId: 13
+bundleId: 58
+url: https://dynamicfit.app/equivalence/
+when: 1611396063.44256
 asMultiple: FALSE
 asStatic: FALSE

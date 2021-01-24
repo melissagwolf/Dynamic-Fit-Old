@@ -5,14 +5,12 @@ output:
   flexdashboard::flex_dashboard:
     orientation: columns
     source_code: embed
-    theme: cosmo
+    theme: flatly
 always_allow_html: yes
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE)
-
-
 library(rmarkdown)
 library(lavaan)
 library(tidyverse)
@@ -26,6 +24,7 @@ library(patchwork)
 library(shinybusy)
 library(purrr)
 library(stringr)
+#library(lemon)
 #library(shinycssloaders)
 
 #List aesthetics first
@@ -63,8 +62,8 @@ body {
 </script>
 
 ```{r design}
-fluidPage(theme = shinytheme("slate"),
-          shinybusy::add_busy_bar(color = "#BECEE4"))
+fluidPage(theme = shinytheme("simplex"),
+          shinybusy::add_busy_bar(color = "#CFEAE4"))
 
 options(shiny.sanitize.errors = FALSE)
 ```
@@ -72,7 +71,7 @@ options(shiny.sanitize.errors = FALSE)
 Sidebar {.sidebar}
 =====================================
 
-This app uses Monte Carlo simulations to generate dynamic fit index cutoff values for multi-factor models.
+This app uses Monte Carlo simulations to generate dynamic fit index cutoff values for one-factor models.
 
 \  
 
@@ -98,7 +97,7 @@ model <- eventReactive(input$go,{input$model_syntax})
 ```
 
 ```{r number_factor}
-#### Function for Number of Factors ####
+#### Function for Number of Factors for Warning ####
 
 number_factor <- function(model){
   
@@ -126,6 +125,8 @@ number_factor <- function(model){
 ```{r unstandardized}
 #Did they enter unstandardized loadings?  Aka, do they have any loadings = 1?
 unstandardized <- function(model){
+  
+  #read in the model
   Mod <- utils::read.delim(model()$datapath, header = FALSE)   
   Mod_C <- base::as.character(Mod$V1)             
   
@@ -141,8 +142,8 @@ unstandardized <- function(model){
 
 ```
 
-```{r cleanmodel}
-#### Function to create model statement without numbers from user model (for input) ####
+```{r clean_model}
+#### Plain model ####
 
 cleanmodel <- function(model){
   
@@ -164,7 +165,10 @@ cleanmodel <- function(model){
 }
 ```
 
-```{r}
+
+```{r defre}
+#### Function to compute DF for warning ####
+
 defre <- function(model,n){
   
   #Get clean model equation
@@ -192,13 +196,14 @@ defre <- function(model,n){
 }
 ```
 
-```{r multi_factor_num}
-### Function to see which items are available ###
+```{r single_factor_num}
+#### Function to compute number of unique items available for misspecifications ####
 
-multi_factor_num <- function(model){
+single_factor_num <- function(model){
   
+  #read in the model
   Mod <- utils::read.delim(model()$datapath, header = FALSE)   
-  Mod_C <- base::as.character(Mod$V1)   
+  Mod_C <- base::as.character(Mod$V1)
   
   #Lavaanify it - have lavaan tell us the parameters
   lav_file <- lavaan::lavaanify(Mod_C, fixed.x=FALSE) %>%
@@ -209,16 +214,7 @@ multi_factor_num <- function(model){
     dplyr::filter(op=="=~") %>%
     dplyr::select(lhs) %>%
     base::unique()
-  
-  #Identify number of items per factor
-  num_items <- lav_file %>%
-    dplyr::filter(op=="=~") %>%
-    dplyr::group_by(lhs) %>%
-    dplyr::count() %>%
-    dplyr::ungroup() %>%
-    base::as.data.frame() %>%
-    `colnames<-`(c("lhs","Original"))
-  
+
   #Identify any items that already have an error covariance
   items_covariance <- factors %>%
     dplyr::mutate(type="Factor") %>%
@@ -232,7 +228,7 @@ multi_factor_num <- function(model){
     dplyr::select(-op,-test) %>%
     dplyr::mutate(lhs=NA,op=NA,ustart=NA)
   
-  #Isolate the items that do not already have an error covariance or cross-loading
+  #Isolate the items that do not already have an error covariance
   solo_items <- lav_file %>%
     dplyr::select(lhs,op,rhs,ustart) %>%
     base::rbind(items_covariance) %>%
@@ -240,226 +236,131 @@ multi_factor_num <- function(model){
     dplyr::group_by(rhs) %>%
     dplyr::add_tally() %>%
     dplyr::filter(n==1) %>%
-    dplyr::ungroup()
-  
-  #Count number of items remaining per factor
-  remaining <- solo_items %>%
-    dplyr::group_by(lhs) %>%
-    dplyr::select(-n) %>%
-    dplyr::count() %>%
-    dplyr::ungroup() %>%
-    dplyr::full_join(num_items,by="lhs") %>% 
-    base::as.data.frame() %>%
-    `colnames<-`(c("lhs","Remaining","Original"))
-  
-  #Add in factor loadings, group by number of items per factor (>2 or 2)
-  #And sort factor loadings magnitude within group 
-  itemoptions <- solo_items %>%  
-    dplyr::full_join(remaining,by="lhs") %>% 
-    dplyr::mutate(priority=ifelse(Original>2 & Remaining !="NA","Three","Two")) %>% 
-    dplyr::group_by(priority) %>% 
-    dplyr::arrange(abs(ustart), .by_group=TRUE) %>% 
     dplyr::ungroup() %>% 
-    dplyr::select(lhs,rhs,ustart,priority) %>% 
-    base::as.data.frame() %>%
-    dplyr::as_tibble() %>%
-    `colnames<-`(c("lhs","Item","Loading","Priority"))
+    arrange(abs(ustart))
   
-  return(itemoptions)
+  return(solo_items)
 }
 ```
 
+```{r single_factor}
+#### Function for single-factor misspecification(s) (all levels) ####
 
-```{r multi_factor}
-#### Function for multi-factor misspecification (Cross-loading) ####
-
-multi_factor <- function(model){
+single_factor <- function(model){
   
-  #read in the model
-  Mod <- utils::read.delim(model()$datapath, header = FALSE)   
-  Mod_C <- base::as.character(Mod$V1)
+  itemoptions <- single_factor_num(model()$datapath)
   
-  #Lavaanify it - have lavaan tell us the parameters
-  lav_file <- lavaan::lavaanify(Mod_C, fixed.x=FALSE) %>%
-    dplyr::filter(.data$lhs != .data$rhs)
+  num_i <- base::nrow(itemoptions)
   
-  num_fact <- number_factor(model()$datapath)
-  
-  itemoptions <- multi_factor_num(model()$datapath)
-  
-  crosses <- itemoptions %>% 
-    group_by(lhs) %>% 
-    slice_min(abs(Loading)) %>% 
-    ungroup() %>% 
-    arrange(Priority,abs(Loading)) %>% 
-    slice(1:(num_fact-1))
-  
-  #identify all factor names (again)
-  factors <- lav_file %>%
-    dplyr::filter(op=="=~") %>%
-    dplyr::select(lhs) %>%
-    base::unique()
-  
-  #Compute Coefficient H for each factor
-  Coef_H <- lavaan::lavaanify(Mod_C, fixed.x = FALSE) %>%
-    dplyr::filter(lhs != rhs) %>%
-    dplyr::filter(op == "=~") %>%
-    dplyr::mutate(L_Sq=ustart^2) %>%
-    dplyr::mutate(E_Var=1-L_Sq) %>%
-    dplyr::mutate(Div=L_Sq/E_Var) %>%
-    dplyr::group_by(lhs) %>%
-    dplyr::summarise(Sum=sum(Div)) %>%
-    dplyr::mutate(H=((1+(Sum^-1))^-1)) %>%
-    dplyr::select(-Sum) %>%
-    dplyr::arrange(-H) %>%
-    `colnames<-`(c("rhs","H"))
-
-  #isolate factors and factor correlations
-  factcor1 <- factors %>%
-    dplyr::mutate(type="Factor") %>%
-    dplyr::full_join(lav_file, by = "lhs") %>%
-    dplyr::mutate(type=recode(type, .missing ="Error Correlation")) %>%
-    dplyr::select(lhs,op,rhs,ustart,type) %>%
-    dplyr::filter(op=="~~" & type=="Factor")
-
-  #flip in reverse so we get a list of all factors in one column
-  factcor2 <- factors %>%
-    dplyr::mutate(type="Factor") %>%
-    dplyr::full_join(lav_file, by = "lhs") %>%
-    dplyr::select(lhs,op,rhs,ustart,type) %>%
-    dplyr::filter(op=="~~" & type=="Factor") %>%
-    `colnames<-`(c("rhs","op","lhs","ustart","type")) %>%
-    dplyr::select(lhs,op,rhs,ustart,type)
-  
-  #Isolate items
-  dup1 <- factcor1 %>%
-    dplyr::full_join(factcor2, by = c("lhs", "op", "rhs", "ustart", "type")) %>% 
-    dplyr::full_join(crosses,by="lhs") %>% 
-    dplyr::full_join(Coef_H,by="rhs") %>% 
-    dplyr::filter(Item != "NA") %>% 
-    dplyr::arrange(abs(Loading))
-  
-  dup2 <- factcor1 %>%
-    dplyr::full_join(factcor2, by = c("lhs", "op", "rhs", "ustart", "type")) %>% 
-    dplyr::full_join(crosses,by="lhs") %>% 
-    dplyr::full_join(Coef_H,by="rhs") %>% 
-    dplyr::filter(Item != "NA") %>% 
-    dplyr::arrange(abs(Loading))
-  
-  setup <- rbind(dup1,dup2) %>%  
-    mutate(lhs_1=lhs,
-           rhs_1=rhs,
-           f_min=pmin(lhs_1,rhs_1),
-           f_max=pmax(lhs_1,rhs_1)) %>% 
-    unite(facts,c("f_min","f_max")) %>% 
-    select(-lhs_1,-rhs_1) %>% 
-    distinct(lhs,op,rhs,ustart,type,Item,Loading,Priority,H,.keep_all = TRUE)
-  
-  setup_copy <- setup
-  
-  cleaned <- data.frame(matrix(nrow=0,ncol=10)) %>% 
-    `colnames<-`(names(setup)) %>% 
-    mutate_if(is.logical, as.character)
-  
-  for (i in unique(setup_copy$Item)){
-    cleaned[i,] <- setup_copy %>% 
-      filter(Item==i) %>% 
-      slice_max(H)
-    setup_copy <- anti_join(setup_copy,cleaned,by="facts")
+  if(num_i==4){
+    num_m <- itemoptions %>% 
+      dplyr::slice(1:2)
+  }else if(num_i==5){
+    num_m <- itemoptions %>% 
+      dplyr::slice(1:4)
+  }else{
+    num_m <- itemoptions %>% 
+      dplyr::slice(1:(floor(num_i/2)*2))
   }
   
-  modinfo <- cleaned %>% 
-    mutate(operator="=~",
-           H=as.numeric(H),
-           Loading=as.numeric(Loading),
-           ustart=as.numeric(ustart)) %>% 
-    arrange(Priority,Loading,-H) 
+  evenindex <- base::seq(2,base::nrow(num_m),2)
+  oddindex <- base::seq(1,base::nrow(num_m),2)
   
-  #Compute maximum allowable cross loading value
-  Cross_Loading <- modinfo %>% 
-    mutate(F1=ustart,
-           F1_Sq=F1^2,
-           L1=Loading,
-           L1_Sq=L1^2,
-           E=1-L1_Sq) %>% 
-    mutate(MaxAllow=((sqrt(((L1_Sq*F1_Sq)+E))-(L1*F1))*.95),
-           MaxAllow2=round(MaxAllow,digits=4),
-           Final_Loading=pmin(Loading,MaxAllow2),
-           times="*") %>% 
-    select(rhs,operator,Final_Loading,times,Item) %>% 
-    unite("V1",sep=" ")
-           
-  #return value to append to model statement
-  return(Cross_Loading)
+  left <- num_m[evenindex,]
+  right <- num_m[oddindex,] %>% 
+    `colnames<-`(c("lhs_1","op_1","rhs_1","ustart_1","n_1"))
+  
+  Residual_Correlation <- base::cbind(left,right) %>% 
+    dplyr::mutate(cor=.3,
+           opp="~~",
+           star="*") %>% 
+    tidyr::unite(V1,c("rhs","opp","cor","star","rhs_1"),sep=" ") %>% 
+    dplyr::select(V1)
+  
+  return(Residual_Correlation)
 }
 ```
 
-```{r misspecified_dgm}
-#### Function to create Misspecified DGM given the number of factors ####
+```{r misspecified_dgm_single}
+#### Function to create Misspecified DGM for each level ####
 
-Misspecified_DGM_Multi <- function(model){
+Misspecified_DGM_Single <- function(model){
 
-  mod <- multi_factor(model()$datapath)
+  num_m<- base::nrow(single_factor_num(model()$datapath))
+  
+  if(num_m==4){
+    L1 <- 1
+    levels <- L1
+  }else if(num_m==5){
+    L1 <- 1
+    L2 <- 2
+    levels <- base::rbind(L1,L2)
+  }else{
+    L3 <- base::floor(num_m/2)
+    L2 <- base::floor((2*L3)/3)
+    L1 <- base::floor(L3/3)
+    levels <- base::rbind(L1,L2,L3)
+  }
+  
+  mod <- single_factor(model()$datapath)
   
   #Get parameters for true dgm
   Mods <- utils::read.delim(model()$datapath, header = FALSE)   
   #Mod_C <- base::as.character(Mods$V1) 
   
-  #multi_mod <- lapply(mod, function(x) rbind(Mods,mod[seq(x), ,drop = FALSE]) %>%
-  #                      data.frame() %>% 
-  #                      pull(V1))
-  
+  #single_mod <- base::lapply(levels, function(x) base::rbind(Mod_C,mod[base::seq(x), ,drop = FALSE]) %>%
+  #                       base::data.frame() %>% 
+  #                       dplyr::pull(V1))
   #This made you miserable. Shiny was struggling with \n at the end of strings here, for some reason.
   
-  multi_mod <- lapply(seq(nrow(mod)), function(x) rbind(Mods,mod[seq(x), ,drop = FALSE]) %>%
-                        data.frame() %>% 
-                        pull(V1))
+  single_mod <- base::lapply(levels, function(x) base::rbind(Mods,mod[base::seq(x), ,drop = FALSE]) %>%
+                         base::data.frame() %>% 
+                         dplyr::pull(V1))
   
-  return(multi_mod)
+  return(single_mod)
 
 }
-
 ```
 
-```{r misspec_mod_fit}
-### Simulate fit indices for misspecified model for all levels ###
+```{r misspec_fit_single}
+#### Function to simulate misspecified model fit for all levels ####
 
-misspecified_model_fit <- function(model,n){
+misspec_fit_single <- function(model,n){
 
   #Get clean model equation
   mod <- cleanmodel(model()$datapath)
 
   #Get parameters for misspecified dgm
-  misspec_dgm <- Misspecified_DGM_Multi(model()$datapath)
+  misspec_dgm <- Misspecified_DGM_Single(model()$datapath)
 
-  #Use max sample size of 2000
-  n <- min(n(),2000)
+  #Use max sample size of 10000
+  n <- base::min(n(),2000)
   
   #Set seed
-  set.seed(269854)
+  set.seed(649364)
   
   #Simulate one large dataset for each misspecification
   all_data_misspec <- purrr::map(misspec_dgm,~simstandard::sim_standardized(m=.,n=n*500,
                                                         latent=FALSE,errors=FALSE))
   
   #Create indicator to split into 500 datasets for 500 reps
-  rep_id_misspec <- rep(1:500,n)
+  rep_id_misspec <- base::rep(1:500,n)
   
   #Combine indicator with dataset
-  dat_rep_misspec <- map(all_data_misspec,~cbind(.,rep_id_misspec))
+  dat_rep_misspec <- purrr::map(all_data_misspec,~base::cbind(.,rep_id_misspec))
   
   #Group and list
-  misspec_data <- map(dat_rep_misspec,~group_by(.,rep_id_misspec) %>% 
-                        nest())
+  misspec_data <- purrr::map(dat_rep_misspec,~dplyr::group_by(.,rep_id_misspec) %>% 
+                        tidyr::nest())
   
   #Grab data level of the list
-  data <- map(misspec_data,2)
+  data <- purrr::map(misspec_data,2)
   
   #Run 500 cfa
-  misspec_cfa <- map(data, function(x) map(x, function(y) cfa(model = mod, data=y, std.lv=TRUE)))
+  misspec_cfa <- purrr::map(data, function(x) purrr::map(x, function(y) lavaan::cfa(model = mod, data=y, std.lv=TRUE)))
   
   #Extract fit stats from each rep (list) into a data frame and clean
-  misspec_fit_sum <- map(misspec_cfa, function(x) map_dfr(x, function(y) fitMeasures(y, c("srmr","rmsea","cfi"))) %>% 
+  misspec_fit_sum <- purrr::map(misspec_cfa, function(x) purrr::map_dfr(x, function(y) lavaan::fitMeasures(y, c("srmr","rmsea","cfi"))) %>%
                            `colnames<-`(c("SRMR_M","RMSEA_M","CFI_M")) %>%
                            dplyr::mutate(Type_M="Misspecified"))
 
@@ -468,11 +369,11 @@ misspecified_model_fit <- function(model,n){
   return(misspec_fit_sum)
 
 }
-
 ```
 
-```{r true_dgm}
+```{r true_model_fit}
 #### Function to create True DGM (aka, just the model the user read in) ####
+
 true_model_fit <- function(model,n){
 
   #Get clean model equation
@@ -488,7 +389,7 @@ true_model_fit <- function(model,n){
   n <- base::min(n(),2000)
   
   #Set Seed
-  set.seed(267326)
+  set.seed(326267)
   
   #Simulate one large dataset  
   all_data_true <- simstandard::sim_standardized(m=true_dgm,n = n*500,
@@ -522,31 +423,30 @@ true_model_fit <- function(model,n){
 }
 ```
 
-```{r multi_df}
+```{r single_df}
 #### Function to combine both model fit stats for all levels into one dataframe ####
-
-multi_df <- eventReactive(input$go,{
+single_df<- eventReactive(input$go,{
 
   #Probably need some sort of grouping statement
   
-  #Use max sample size of 2000
+  #Use max sample size of 10000
   n <- min(n(),2000)
 
   #Get fit stats for misspecified model
-  misspec_fit <- misspecified_model_fit(model()$datapath,n)
+  misspec_fit <- misspec_fit_single(model()$datapath,n)
 
   #Get fit stats for correctly specified model
   true_fit <- true_model_fit(model()$datapath,n)
 
   #Produce final table by level
-  Table <- map(misspec_fit,~cbind(.,true_fit))
+  Table <- purrr::map(misspec_fit,~cbind(.,true_fit))
 
   #Final table
   return(Table)
 })
 ```
 
-Multi-factor CFA
+One-Factor CFA
 =====================================  
 
 Row {.tabset}
@@ -555,7 +455,7 @@ Row {.tabset}
 
 ### Instructions
 
-**To generate dynamic fit index cutoffs for multi-factor models:**
+**To generate dynamic fit index cutoffs for one-factor models:**
 
 1. Input your sample size
 1. Write your model statement in a **text** file (.txt).
@@ -563,19 +463,17 @@ Row {.tabset}
    - Factor loadings are denoted by = ~
    - Correlations are denoted by ~ ~
    - Enter the magnitude of the relationship first
-1. **Important**: Make sure to press enter at the end of the last line of the model statement before saving the text file.  
+1. **Important**: Make sure to **press enter** at the end of the last line of the model statement before saving the text file.  
 1. Upload the text file with the model statement and press submit.
 1. When the simulations are complete, the results will appear in the **Results** and **Plots** tabs.
 
 **Example:**
 
 <div>
-```{r instructions, out.width="65%"}
-include_graphics("Example3.png")
+```{r out.width="75%"}
+include_graphics("Example_Single.png")
 ```
 </div>
-
-**Note**: These cutoff values are currently only accurate for **single level** models.  Any cutoff values produced for bi-factor models or higher-order models are inaccurate (you will likely get an error message if you try to compute them).
 
 <div>
 ```{r progress1}
@@ -590,8 +488,8 @@ renderPlot({
                "You must enter a text file (.txt)"))
   
   shiny::validate(
-    shiny::need(number_factor(model()$datapath)>1,
-                "You entered a one-factor model. Go back to the main page and select the one-factor CFA application."))
+    shiny::need(number_factor(model()$datapath)==1,
+                "You entered a multi-factor model. Go back to the main page and select the multi-factor CFA application."))
 
   shiny::validate(
     shiny::need(unstandardized(model()$datapath)==0,
@@ -602,10 +500,10 @@ renderPlot({
                 "It is impossible to add misspecifications to a just identified model."))
   
   shiny::validate(
-    shiny::need(nrow(multi_factor_num(model()$datapath))>(number_factor(model()$datapath)-1),
-                     "There are not enough free items to produce all misspecification levels."))
+    shiny::need(nrow(single_factor_num(model()$datapath))>3,
+                     "There are not enough free items to produce misspecification levels."))
   
-  invisible(multi_df() %>% 
+  invisible(single_df() %>% 
     unlist())
   
 }, width=1,height=1)
@@ -614,7 +512,7 @@ renderPlot({
 
 ### Results
 
-These are the dynamic model fit index cutoff values for your model:
+These are the dynamic fit index cutoff values for your model:
 
 <div>
 ```{r fit-table}
@@ -627,8 +525,8 @@ renderTable({
                "You must enter a text file (.txt)"))
   
   shiny::validate(
-    shiny::need(number_factor(model()$datapath)>1,
-                "You entered a one-factor model. Go back to the main page and select the one-factor CFA application."))
+    shiny::need(number_factor(model()$datapath)==1,
+                "You entered a multi-factor model. Go back to the main page and select the multi-factor CFA application."))
 
   shiny::validate(
     shiny::need(unstandardized(model()$datapath)==0,
@@ -639,60 +537,57 @@ renderTable({
                 "It is impossible to add misspecifications to a just identified model."))
   
   shiny::validate(
-    shiny::need(nrow(multi_factor_num(model()$datapath))>(number_factor(model()$datapath)-1),
-                     "There are not enough free items to produce all misspecification levels."))
-
-  results <- multi_df()
-
-  misspec_sum <- map(results,~summarise(.,SRMR_M=quantile(SRMR_M, c(.05,.1)),
-                                        RMSEA_M=quantile(RMSEA_M, c(.05,.1)),
-                                        CFI_M=quantile(CFI_M, c(.95,.9))))
-  true_sum <- map(results,~dplyr::summarise(.,SRMR_T=quantile(SRMR_T, c(.95,.9)),
-                                            RMSEA_T=quantile(RMSEA_T, c(.95,.9)),
-                                            CFI_T=quantile(CFI_T, c(.05,.1))))
+    shiny::need(nrow(single_factor_num(model()$datapath))>3,
+                     "There are not enough free items to produce misspecification levels."))
   
-  Table <- map(misspec_sum,~cbind(.,true_sum[[1]]) %>% 
-                 mutate(SRMR_R=base::round(SRMR_M,3),
+  results <- single_df()
+    
+  misspec_sum <- purrr::map(results,~dplyr::summarise(.,SRMR_M=stats::quantile(SRMR_M, c(.05,.1)),
+                                        RMSEA_M=stats::quantile(RMSEA_M, c(.05,.1)),
+                                        CFI_M=stats::quantile(CFI_M, c(.95,.9))))
+  true_sum <- purrr::map(results,~dplyr::summarise(.,SRMR_T=stats::quantile(SRMR_T, c(.95,.9)),
+                                            RMSEA_T=stats::quantile(RMSEA_T, c(.95,.9)),
+                                            CFI_T=stats::quantile(CFI_T, c(.05,.1))))
+  
+  Table <- purrr::map(misspec_sum,~base::cbind(.,true_sum[[1]]) %>% 
+                 dplyr::mutate(SRMR_R=base::round(SRMR_M,3),
                         RMSEA_R=base::round(RMSEA_M,3),
                         CFI_R=base::round(CFI_M,3),
                         SRMR=base::ifelse(SRMR_T<SRMR_M,SRMR_R,"NONE"),
                         RMSEA=base::ifelse(RMSEA_T<RMSEA_M,RMSEA_R,"NONE"),
-                        CFI=base::ifelse(CFI_T>CFI_M,CFI_R,"NONE")) %>%
+                        CFI=base::ifelse(CFI_T>CFI_M,CFI_R,"NONE")) %>% 
                  dplyr::select(SRMR,RMSEA,CFI)) 
   
-  Row2 <- map_dfr(Table,~mutate(.,SRMR_1=SRMR,
+  Row2 <- purrr::map_dfr(Table,~dplyr::mutate(.,SRMR_1=SRMR,
                                 RMSEA_1=RMSEA,
                                 CFI_1=CFI) %>%
-                    mutate_at(c("SRMR_1","RMSEA_1","CFI_1"),list(lead)) %>% 
-                    slice(1) %>% 
-                    mutate(SRMR=ifelse(is.character(SRMR),SRMR_1,"--"),
-                           RMSEA=ifelse(is.character(RMSEA),RMSEA_1,"--"),
-                           CFI=ifelse(is.character(CFI),CFI_1,"--"),
-                           SRMR=str_replace_all(as.character(SRMR),"0\\.","."),
-                           RMSEA=str_replace_all(as.character(RMSEA),"0\\.","."),
-                           CFI=str_replace_all(as.character(CFI),"0\\.",".")) %>%
-                    select(SRMR,RMSEA,CFI)) 
+                    dplyr::mutate_at(c("SRMR_1","RMSEA_1","CFI_1"),base::list(lead)) %>% 
+                    dplyr::slice(1) %>% 
+                    dplyr::mutate(SRMR=base::ifelse(base::is.character(SRMR),SRMR_1,"--"),
+                           RMSEA=base::ifelse(base::is.character(RMSEA),RMSEA_1,"--"),
+                           CFI=base::ifelse(base::is.character(CFI),CFI_1,"--"),
+                           SRMR=stringr::str_replace_all(base::as.character(SRMR),"0\\.","."),
+                           RMSEA=stringr::str_replace_all(base::as.character(RMSEA),"0\\.","."),
+                           CFI=stringr::str_replace_all(base::as.character(CFI),"0\\.",".")) %>% 
+                    dplyr::select(SRMR,RMSEA,CFI)) 
   
-  Table_C <- map_dfr(Table,~mutate(.,SRMR=str_replace_all(as.character(SRMR),"0\\.","."),
-                                   RMSEA=str_replace_all(as.character(RMSEA),"0\\.","."),
-                                   CFI=str_replace_all(as.character(CFI),"0\\.",".")))
-
-  Table_C[seq(2,nrow(Table_C),by=2),] <- Row2 
+  Table_C <- purrr::map_dfr(Table,~dplyr::mutate(.,SRMR=stringr::str_replace_all(base::as.character(SRMR),"0\\.","."),
+                                   RMSEA=stringr::str_replace_all(base::as.character(RMSEA),"0\\.","."),
+                                   CFI=stringr::str_replace_all(base::as.character(CFI),"0\\.",".")))
   
-  num_fact <- (number_factor(model()$datapath)-1)
+  Table_C[base::seq(2,nrow(Table_C),by=2),] <- Row2 
   
-  Table_C$levelnum <- paste("Level", rep(1:num_fact,each=2))
+  Table_C$levelnum <- base::paste("Level", base::rep(1:(base::nrow(Table_C)/2),each=2))
   
-  Table_C$cut <- rep(c("95/5","90/10"))
+  Table_C$cut <- base::rep(c("95/5","90/10"))
   
-  Final_Table <- Table_C %>% 
-    unite(Cut,levelnum,cut,sep=": ") %>% 
+  Table_C %>% 
+    tidyr::unite(Cut,levelnum,cut,sep=": ") %>% 
     column_to_rownames(var='Cut')
   
   },
     digits=3, align='c', rownames = TRUE, width="auto",
-    bordered = TRUE) 
-
+    bordered = TRUE)
 ```
 </div>
 
@@ -700,10 +595,12 @@ renderTable({
 
 **Levels**
 
-Goodness of fit indices can be used *as one piece of evidence of validity* to gauge if your model's misspecifications are trivial or substantial.  You will see a level of misspecification severity for each F-1 factor (where F is the number of factors), in accordance with the procedure established by Hu & Bentler in 1999.  
+Goodness of fit indices can be used *as one piece of evidence of validity* to gauge if your model's misspecifications are trivial or substantial.  Depending upon the number of items in your model, you will see up to 3 levels of misspecification, where level 1 is the least severe and level 3 is the most severe.  
 
-Hu & Bentler derived their cutoff values from a 3 factor model with 15 items, a range of loadings from .7 - .8, and a range of sample sizes from 250 - 5000.  The cutoff values outputted for **Level 1** are the Hu & Bentler equivalent for *your* particular model.  In other words, if Hu & Bentler had used *your* model to generate cutoff values, these are the cutoff values they would have published.  
-
+  - Level 1 $\approx$ 1/3 of items have a residual correlation of .3 that you failed to include in your model
+  - Level 2 $\approx$ 2/3 of items have a residual correlation of .3 that you failed to include in your model
+  - Level 3 $\approx$ All items have a residual correlation of .3 that you failed to include in your model
+  
 Your area(s) of concern may differ from the misspecifications simulated here.  You should also consult the residual correlation matrix for local areas of strain, check out the modification indices, and present other types of evidence of validity (such as an evaluation of participants' response processes).
 
 **Rows**
@@ -731,8 +628,8 @@ plotlist <- reactive({
                "You must enter a text file (.txt)"))
   
   shiny::validate(
-    shiny::need(number_factor(model()$datapath)>1,
-                "You entered a one-factor model. Go back to the main page and select the one-factor CFA application."))
+    shiny::need(number_factor(model()$datapath)==1,
+                "You entered a multi-factor model. Go back to the main page and select the multi-factor CFA application."))
 
   shiny::validate(
     shiny::need(unstandardized(model()$datapath)==0,
@@ -743,27 +640,27 @@ plotlist <- reactive({
                 "It is impossible to add misspecifications to a just identified model."))
   
   shiny::validate(
-    shiny::need(nrow(multi_factor_num(model()$datapath))>(number_factor(model()$datapath)-1),
-                     "There are not enough free items to produce all misspecification levels."))
+    shiny::need(nrow(single_factor_num(model()$datapath))>3,
+                     "There are not enough free items to produce misspecification levels."))
   
-  results <- multi_df()
+  results <- single_df()
   
-  misspec_sum <- map(results,~summarise(.,SRMR_M=quantile(SRMR_M, c(.05,.1)),
-                                        RMSEA_M=quantile(RMSEA_M, c(.05,.1)),
-                                        CFI_M=quantile(CFI_M, c(.95,.9))))
-  true_sum <- map(results,~dplyr::summarise(.,SRMR_T=quantile(SRMR_T, c(.95,.9)),
-                                            RMSEA_T=quantile(RMSEA_T, c(.95,.9)),
-                                            CFI_T=quantile(CFI_T, c(.05,.1))))
+  misspec_sum <- purrr::map(results,~dplyr::summarise(.,SRMR_M=stats::quantile(SRMR_M, c(.05,.1)),
+                                        RMSEA_M=stats::quantile(RMSEA_M, c(.05,.1)),
+                                        CFI_M=stats::quantile(CFI_M, c(.95,.9))))
+  true_sum <- purrr::map(results,~dplyr::summarise(.,SRMR_T=stats::quantile(SRMR_T, c(.95,.9)),
+                                            RMSEA_T=stats::quantile(RMSEA_T, c(.95,.9)),
+                                            CFI_T=stats::quantile(CFI_T, c(.05,.1))))
   
-  Misspec_dat <- map(results,~select(.,SRMR_M:Type_M) %>% 
+  Misspec_dat <- purrr::map(results,~dplyr::select(.,SRMR_M:Type_M) %>% 
                        `colnames<-`(c("SRMR","RMSEA","CFI","Model")))
   
-  True_dat <- map(results,~select(.,SRMR_T:Type_T) %>% 
+  True_dat <- purrr::map(results,~dplyr::select(.,SRMR_T:Type_T) %>% 
                     `colnames<-`(c("SRMR","RMSEA","CFI","Model")))
   
-  plot <- lapply(seq(length(Misspec_dat)),function(x) bind_rows(Misspec_dat[x],True_dat[x]))
+  plot <- base::lapply(base::seq(base::length(Misspec_dat)),function(x) dplyr::bind_rows(Misspec_dat[x],True_dat[x]))
   
-  SRMR_plot <- map2(plot,misspec_sum,~ggplot(data=.x,aes(x=SRMR,fill=Model))+
+  SRMR_plot <- purrr::map2(plot,misspec_sum,~ggplot(data=.x,aes(x=SRMR,fill=Model))+
                       geom_histogram(position="identity",
                                      alpha=.5, bins=30)+
                       scale_fill_manual(values=c("#E9798C","#66C2F5"))+
@@ -791,7 +688,7 @@ plotlist <- reactive({
                             legend.box = "vertical"))
   
   
-  RMSEA_plot <- map2(plot,misspec_sum,~ggplot(data=.x,aes(x=RMSEA,fill=Model))+
+  RMSEA_plot <- purrr::map2(plot,misspec_sum,~ggplot(data=.x,aes(x=RMSEA,fill=Model))+
                        geom_histogram(position="identity",
                                       alpha=.5, bins=30)+
                        scale_fill_manual(values=c("#E9798C","#66C2F5"))+
@@ -818,7 +715,7 @@ plotlist <- reactive({
                              legend.title = element_blank(),
                              legend.box = "vertical"))
   
-  CFI_plot <- map2(plot,misspec_sum,~ggplot(data=.x,aes(x=CFI,fill=Model))+
+  CFI_plot <- purrr::map2(plot,misspec_sum,~ggplot(data=.x,aes(x=CFI,fill=Model))+
                      geom_histogram(position="identity",
                                     alpha=.5, bins=30)+
                      scale_fill_manual(values=c("#E9798C","#66C2F5"))+
@@ -846,16 +743,16 @@ plotlist <- reactive({
                            legend.box = "vertical"))
   
   
-  plots_combo <- lapply(seq(length(plot)),function(x) c(SRMR_plot[x],RMSEA_plot[x],CFI_plot[x]))
+  plots_combo <- base::lapply(base::seq(base::length(plot)),function(x) c(SRMR_plot[x],RMSEA_plot[x],CFI_plot[x]))
   
-  plots <- lapply(seq(length(plots_combo)), function(x) wrap_plots(plots_combo[[x]])+
+  plots <- base::lapply(base::seq(base::length(plots_combo)), function(x) patchwork::wrap_plots(plots_combo[[x]])+
            plot_layout(guides = "collect")+
            plot_annotation(title=paste("Level", x))
          & theme(legend.position = 'bottom'))
   
   plots
   
-})
+  })
 
 renderUI({
     plot_output_list <- lapply(1:length(plotlist()), function(i) {
@@ -878,57 +775,12 @@ for (i in 1:length(plotlist())) {
 })
 
 ```
+
 </div>
-
-### Info
-
-These are the misspecification(s) that were added to your data generating model.  These misspecifications are additive across levels.  In other words, a level 2 misspecification has the misspecification from level 1 in addition to the misspecification from level 2.  In total, there are F-1 misspecifications, where F is the number of factors in the model. This is a replication of the approach used by Hu & Bentler (1999), applied to the user's model.
-
-```{r}
-renderTable({
-  
-  shiny::validate(
-          shiny::need(tools::file_ext(model()$name) %in% 
-                 c('text','.txt','txt'),
-               "You must enter a text file (.txt)"))
-  
-  shiny::validate(
-    shiny::need(number_factor(model()$datapath)>1,
-                "You entered a one-factor model. Go back to the main page and select the one-factor CFA application."))
-
-  shiny::validate(
-    shiny::need(unstandardized(model()$datapath)==0,
-    "One of your loadings or correlations has a value of 1 or above (an impossible value). You must use standardized loadings."))
-  
-  shiny::validate(
-    shiny::need(defre(model()$datapath,n())>1,
-                "It is impossible to add misspecifications to a just identified model."))
-  
-  shiny::validate(
-    shiny::need(nrow(multi_factor_num(model()$datapath))>(number_factor(model()$datapath)-1),
-                     "There are not enough free items to produce all misspecification levels."))
-  
-  m_info <- multi_factor(model()$datapath)
-  
-  add <- m_info %>% 
-    tidyr::separate(V1, into=c("a","b","c","d","e"), sep=" ") %>% 
-    dplyr::select(c) %>% 
-    dplyr::mutate("Magnitude of Omitted Loading"=stringr::str_replace_all(c,"0\\.","."),
-                  "Additional Paths in DGM"=dplyr::row_number(),
-                  "Level"=paste("Level",row_number())) %>% 
-    dplyr::select("Level","Additional Paths in DGM","Magnitude of Omitted Loading") %>% 
-    column_to_rownames(var="Level")
-  
-  add
-},
-    digits=3, align='c', rownames = TRUE, width="auto",
-    bordered = TRUE)
-```
-
 
 ### References
 
-To cite the ideas behind dynamic model fit index cutoff values:
+To cite the ideas behind dynamic fit index cutoff values:
 
 - [McNeish, D.](https://sites.google.com/site/danielmmcneish/home) & [Wolf, M. G.](https://www.melissagwolf.com/) (2020, July 7). Dynamic Fit Index Cutoffs for Confirmatory Factor Analysis Models. https://doi.org/10.31234/osf.io/v8yru
 
@@ -942,15 +794,15 @@ To cite the dynamic model index cutoff values generated by this app:
 
 \  
 
-To learn more about why you should use dynamic model fit index cutoffs instead of [Hu & Bentler's (1999)](https://psycnet.apa.org/record/1998-03102-001) fixed model fit index cutoff values, consider these articles:
+To learn more about why you should use dynamic fit index cutoffs instead of [Hu & Bentler's (1999)](https://psycnet.apa.org/record/1998-03102-001) fixed fit index cutoff values, consider these articles:
 
-- Greiff, S., & Heene, M. [(2017)](https://doi.org/10.1027/1015-5759/a000450). Why psychological assessment needs to start worrying about model fit [Editorial]. *European Journal of Psychological Assessment, 33*(5), 313–317. 
-- Hancock, G. R., & Mueller, R. O. [(2011)](https://pdfs.semanticscholar.org/53d6/c1690265df617dd33ebc94cdc76fbf97777d.pdf). The reliability paradox in assessing structural relations within covariance structure models. *Educational and Psychological Measurement, 71*(2), 306–324.
 - Heene, M., Hilbert, S., Draxler, C., Ziegler, M., & Bühner, M. [(2011)](https://doi.org/10.1037/a0024917). Masking misfit in confirmatory factor analysis by increasing unique variances: A cautionary note on the usefulness of cutoff values of fit indices. *Psychological Methods, 16*(3), 319–336. 
 - Marsh, H. W., Hau, K. T., & Wen, Z. [(2004)](https://www.researchgate.net/publication/289963902_In_Search_of_Golden_Rules_Comment_on_Hypothesis-Testing_Approaches_to_Setting_Cutoff_Values_for_Fit_Indexes_and_Dangers_in_Overgeneralizing_Hu_and_Bentler's_1999_Findings). In Search of Golden Rules: Comment on Hypothesis-Testing Approaches to Setting Cutoff Values for Fit Indexes and Dangers in Overgeneralizing Hu and Bentler's (1999) Findings. *Structural Equation Modeling: A Multidisciplinary Journal, 11*(3), 320-341.
 - McNeish, D., An, J. & Hancock, G. R. [(2018)](https://www.researchgate.net/publication/311536084_The_Thorny_Relation_between_Measurement_Quality_and_Fit_Index_Cut-Offs_in_Latent_Variable_Models). The Thorny Relation Between Measurement Quality and Fit Index Cutoffs in Latent Variable Models. *Journal of Personality Assessment, 100*(1), 43-52.
 - Millsap, R. E. [(2007)](https://www.sciencedirect.com/science/article/abs/pii/S0191886906003862). Structural equation modeling made difficult. *Personality and Individual Differences, 42*, 875-881.
 - Muliak, S. [(2007)](https://psycnet.apa.org/record/2007-02474-010). There is a place for approximate fit in structural equation modelling. *Personality and Individual Differences, 42*(5), 883–891.
+- Shi, D., Lee, T., & Maydeu-Olivares, A. [(2019)](https://www.researchgate.net/publication/326077335_Understanding_the_Model_Size_Effect_on_SEM_Fit_Indices). Understanding the model size effect on SEM fit indices. *Educational and Psychological Measurement, 79*(2), 310-334.
+- Shi, D., & Maydeu-Olivares, A. [(2020)](https://journals.sagepub.com/doi/10.1177/0013164419885164?icid=int.sj-abstract.citing-articles.1). The Effect of Estimation Methods on SEM Fit Indices. *Educational and Psychological Measurement, 80*(3), 421-445.
 
 Computationally, this app relies on the following packages:
 
@@ -983,22 +835,22 @@ renderPlot({
                "You must enter a text file (.txt)"))
   
   shiny::validate(
-    shiny::need(number_factor(model()$datapath)>1,
-                "You entered a one-factor model. Go back to the main page and select the one-factor CFA application."))
+    shiny::need(number_factor(model()$datapath)==1,
+                "You entered a multi-factor model. Go back to the main page and select the multi-factor CFA application."))
 
   shiny::validate(
     shiny::need(unstandardized(model()$datapath)==0,
     "One of your loadings or correlations has a value of 1 or above (an impossible value). You must use standardized loadings."))
   
   shiny::validate(
-    shiny::need(defre(model()$datapath,n())>1,
+    shiny::need(defre(model()$datapath,n())>0,
                 "It is impossible to add misspecifications to a just identified model."))
   
   shiny::validate(
-    shiny::need(nrow(multi_factor_num(model()$datapath))>(number_factor(model()$datapath)-1),
-                     "There are not enough free items to produce all misspecification levels."))
+    shiny::need(nrow(single_factor_num(model()$datapath))>3,
+                     "There are not enough free items to produce misspecification levels."))
   
-  invisible(multi_df() %>% 
+  invisible(single_df() %>% 
     unlist())
   
 }, width=1,height=1)

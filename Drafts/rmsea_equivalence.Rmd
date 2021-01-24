@@ -1,0 +1,269 @@
+---
+title: "Dynamic Model Fit"
+runtime: shiny
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    source_code: embed
+    theme: sandstone
+always_allow_html: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+
+library(rmarkdown)
+library(lavaan)
+library(tidyverse)
+library(simstandard)
+library(shiny)
+library(shinythemes)
+library(flexdashboard)
+library(knitr)
+library(tools)
+library(patchwork)
+library(shinybusy)
+library(purrr)
+library(stringr)
+#library(shinycssloaders)
+
+#List aesthetics first
+```
+
+<style type="text/css">
+
+body {
+  font-family: Palatino;
+}
+
+.shiny-output-error-validation {
+        color: #ff0000;
+      }
+
+</style>
+
+<!-- Search Engine Optimization -->
+<html>
+<head>
+<title>Dynamic Fit Index Cutoffs for CFA Models</title>
+
+<meta name="description" content="Derive dynamic fit index cutoffs that are adaptively tailored to the specific factor model and data being evaluated."/>
+</head>
+</html>
+
+<!-- Global site tag (gtag.js) - Google Analytics -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=UA-167733193-2"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'UA-167733193-2');
+</script>
+
+```{r design}
+fluidPage(theme = shinytheme("sandstone"),
+          shinybusy::add_busy_bar(color = "#E8EDE0"))
+
+options(shiny.sanitize.errors = FALSE)
+```
+
+Sidebar {.sidebar}
+=====================================
+
+This app uses equivalence testing to return a range of RMSEA values that can be used to assess model fit for structural equation models.
+
+\  
+
+```{r inputs}
+numericInput("sampsize", "Input Sample Size", value=NULL)
+
+numericInput("chisq", "Input Model Chi-Square", value=NULL)
+
+numericInput("defre", "Input Model Degrees of Freedom", value=NULL)
+
+actionButton("go", "Submit")
+```
+
+```{r rename}
+#Name inputs
+N <- eventReactive(input$go,{input$sampsize})
+TML <- eventReactive(input$go,{input$chisq})
+DF <- eventReactive(input$go,{input$df})
+```
+
+```{r function}
+
+```
+
+
+Multi-factor CFA
+=====================================  
+
+Row {.tabset}
+-----------------------------------------------------------------------
+
+### Results
+
+These are the dynamic model fit index cutoff values for your model:
+
+<div>
+```{r fit-table}
+#Generate dynamic model fit index cutoffs and table
+renderTable({
+
+  #The formula is from Venables 1975 for obtaining the noncentrality #of a non-central chi-square distribution;
+df <- DF()
+T_ml <- TML()
+n=N()-1
+alpha=.05
+
+ncp_chi2=function(alpha, T_ml,df){
+  
+df <- DF()
+T_ml <- TML()
+n=N()-1
+  
+z=qnorm(1-alpha)
+z2=z*z 
+z3=z2*z 
+z4=z3*z 
+z5=z4*z
+sig2=2*(2*T_ml-df+2)
+sig=sqrt(sig2)
+sig3=sig*sig2
+sig4=sig2*sig2
+sig5=sig4*sig
+sig6=sig2*sig4
+
+delta=T_ml-df+2+sig*
+(
+  z+(z2-1)/sig-z/sig2 + 2*(df-1)*(z2-1)/(3*sig3)
+  +( -(df-1)*(4*z3-z)/6+(df-2)*z/2 )/sig4
+  +4*(df-1)*(3*z4+2*z2-11)/(15*sig5)
+  +(
+  -(df-1)*(96*z5+164*z3-767*z)/90-4*(df-1)*(df-2)*(2*z3-5*z)/9
+      +(df-2)*z/2
+  )/sig6
+)
+
+delta=max(delta,0)
+
+return(delta)
+}
+
+
+#Raw RMSEA#
+delta_c=max(0,T_ml-df);
+RMSEA_c=sqrt(delta_c/((N-1)*df));
+
+#T-size RMSEA#;
+delta_t=ncp_chi2(alpha, T_ml,df);
+RMSEA_t=sqrt(delta_t/(df*(N-1)));
+
+#Recalculate Bins based on Model Characteristics#
+
+RMSEA_e01=exp(
+1.34863-.51999*log(df)+.01925*log(df)*log(df)-.59811*log(n)+.00902*sqrt(n)+.01796*log(df)*log(n));
+
+
+RMSEA_e05=exp(2.06034-.62974*log(df)+.02512*log(df)*log(df)-.98388*log(n)
++.05442*log(n)*log(n)-.00005188*n+.05260*log(df)*log(n));
+
+
+RMSEA_e08=exp(2.84129-.54809*log(df)+.02296*log(df)*log(df)-.76005*log(n)
++.10229*log(n)*log(n)-1.11167*(n^.2)+.04845*log(df)*log(n));
+
+
+RMSEA_e10=exp(2.36352-.49440*log(df)+.02131*log(df)*log(df)-.64445*log(n)
++.09043*log(n)*log(n)-1.01634*(n^.2)+.04422*log(df)*log(n));
+
+
+cutoff=cbind(RMSEA_e01, RMSEA_e05, RMSEA_e08, RMSEA_e10);
+cutoff_3=round(cutoff,3);
+
+good <- c("Excellent:","Close:","Fair:","Mediocre:","Poor:")
+
+one <- paste(cutoff_3[1],"or below")
+two <- paste(cutoff_3[1],"to",cutoff_3[2])
+three <- paste(cutoff_3[2],"to",cutoff_3[3])
+four <- paste(cutoff_3[3],"to",cutoff_3[4])
+five <- paste(cutoff_3[4],"or above")
+
+vals <- rbind(one,two,three,four,five)
+
+as.data.frame(cbind(good,vals))
+  }) 
+
+```
+</div>
+
+\  
+
+**Levels**
+
+Goodness of fit indices can be used *as one piece of evidence of validity* to gauge if your model's misspecifications are trivial or substantial.  You will see a level of misspecification severity for each F-1 factor (where F is the number of factors), in accordance with the procedure established by Hu & Bentler in 1999.  
+
+Hu & Bentler derived their cutoff values from a 3 factor model with 15 items, a range of loadings from .7 - .8, and a range of sample sizes from 250 - 5000.  The cutoff values outputted for **Level 1** are the Hu & Bentler equivalent for *your* particular model.  In other words, if Hu & Bentler had used *your* model to generate cutoff values, these are the cutoff values they would have published.  
+
+Your area(s) of concern may differ from the misspecifications simulated here.  You should also consult the residual correlation matrix for local areas of strain, check out the modification indices, and present other types of evidence of validity (such as an evaluation of participants' response processes).
+
+**Rows**
+
+Within each level, there are two rows.
+
+- The first row of the table represents the ideal cutoff values for that misspecification level.  At this cutoff value, 95% of misspecified models will be correctly rejected, while only 5% of correctly specified models will be incorrectly rejected.  This value is best equipped to distinguish between a well-fitting and misspecified model.
+
+- The second row of the table represents acceptable cutoff values for that misspecification level.  At this cutoff value, 90% of misspecified models will be correctly rejected, while 10% of correctly specified models will be incorrectly rejected.  If the first row says NONE, you should use this value instead.  *This row will be blank if ideal cutoff values are available*.
+
+If you see the word NONE in both rows, that means that there are no dynamic fit index cutoff values for that fit index that will correctly reject a misspecified model 90% of the time while also correctly failing to reject a correctly specified model at least 10% of the time. Thus, this fit index cannot distinguish between well-fitting models and ill-fitting models for your model, for that level of misspecification.
+
+### Plots
+
+A comparison of the fit index distributions for the "true" empirical model and the "misspecified" empirical model, for each level.  The dashed line represents the ideal dynamic model fit cutoff value for the user's empirical model.  The dotted line represents the commonly used cutoff values recommended by Hu & Bentler (1999).
+
+### References
+
+To cite the ideas behind dynamic model fit index cutoff values:
+
+- [McNeish, D.](https://sites.google.com/site/danielmmcneish/home) & [Wolf, M. G.](https://www.melissagwolf.com/) (2020, July 7). Dynamic Fit Index Cutoffs for Confirmatory Factor Analysis Models. https://doi.org/10.31234/osf.io/v8yru
+
+    - *Paper is currently under review*
+
+To cite the dynamic model index cutoff values generated by this app:
+
+- [Wolf, M. G.](https://www.melissagwolf.com/) & [McNeish, D.](https://sites.google.com/site/danielmmcneish/home) (2020). Dynamic Model Fit. R Shiny application version 1.0.1.
+
+    - *An accompanying R package is under development*
+
+\  
+
+To learn more about why you should use dynamic model fit index cutoffs instead of [Hu & Bentler's (1999)](https://psycnet.apa.org/record/1998-03102-001) fixed model fit index cutoff values, consider these articles:
+
+- Greiff, S., & Heene, M. [(2017)](https://doi.org/10.1027/1015-5759/a000450). Why psychological assessment needs to start worrying about model fit [Editorial]. *European Journal of Psychological Assessment, 33*(5), 313–317. 
+- Hancock, G. R., & Mueller, R. O. [(2011)](https://pdfs.semanticscholar.org/53d6/c1690265df617dd33ebc94cdc76fbf97777d.pdf). The reliability paradox in assessing structural relations within covariance structure models. *Educational and Psychological Measurement, 71*(2), 306–324.
+- Heene, M., Hilbert, S., Draxler, C., Ziegler, M., & Bühner, M. [(2011)](https://doi.org/10.1037/a0024917). Masking misfit in confirmatory factor analysis by increasing unique variances: A cautionary note on the usefulness of cutoff values of fit indices. *Psychological Methods, 16*(3), 319–336. 
+- Marsh, H. W., Hau, K. T., & Wen, Z. [(2004)](https://www.researchgate.net/publication/289963902_In_Search_of_Golden_Rules_Comment_on_Hypothesis-Testing_Approaches_to_Setting_Cutoff_Values_for_Fit_Indexes_and_Dangers_in_Overgeneralizing_Hu_and_Bentler's_1999_Findings). In Search of Golden Rules: Comment on Hypothesis-Testing Approaches to Setting Cutoff Values for Fit Indexes and Dangers in Overgeneralizing Hu and Bentler's (1999) Findings. *Structural Equation Modeling: A Multidisciplinary Journal, 11*(3), 320-341.
+- McNeish, D., An, J. & Hancock, G. R. [(2018)](https://www.researchgate.net/publication/311536084_The_Thorny_Relation_between_Measurement_Quality_and_Fit_Index_Cut-Offs_in_Latent_Variable_Models). The Thorny Relation Between Measurement Quality and Fit Index Cutoffs in Latent Variable Models. *Journal of Personality Assessment, 100*(1), 43-52.
+- Millsap, R. E. [(2007)](https://www.sciencedirect.com/science/article/abs/pii/S0191886906003862). Structural equation modeling made difficult. *Personality and Individual Differences, 42*, 875-881.
+- Muliak, S. [(2007)](https://psycnet.apa.org/record/2007-02474-010). There is a place for approximate fit in structural equation modelling. *Personality and Individual Differences, 42*(5), 883–891.
+
+Computationally, this app relies on the following packages:
+
+- [lavaan](http://www.jstatsoft.org/v48/i02/). Rosseel, Y. (2012). lavaan: An R Package for Structural Equation Modeling. Journal of Statistical Software, 48(2), 1-36.
+- [simstandard](https://CRAN.R-project.org/package=simstandard). Schneider, W. J. (2019). simstandard: Generate Standardized Data. R package version 0.3.0. 
+- [tidyverse](https://doi.org/10.21105/joss.01686). Wickham et al., (2019). Welcome to the tidyverse. Journal of Open Source Software, 4(43), 1686.
+
+Aesthetically, this app relies on the following packages:
+
+- [shiny](https://CRAN.R-project.org/package=shiny). Chang, W., Cheng, J., Allaire, J., Xie, Y., & McPherson, J. (2020). shiny: Web Application Framework for R. R package version 1.4.0.2.
+- [flexdashboard](https://CRAN.R-project.org/package=flexdashboard). Iannone, R., Allaire, J., & Borges, B. (2018). flexdashboard: R
+  Markdown Format for Flexible Dashboards. R package version 0.5.1.1.
+- [shinythemes](https://CRAN.R-project.org/package=shinythemes). Winston Chang (2018). shinythemes: Themes for Shiny. R package version 1.1.2.
+- [shinybusy](https://CRAN.R-project.org/package=shinybusy). Meyer, F. & Perrier, V. (2019). shinybusy: Busy Indicator for 'Shiny' Applications. R package version 0.2.0. 
+- [patchwork](https://CRAN.R-project.org/package=patchwork). Pendersen, T. L. (2020). patchwork: The Composer of Plots. R package version 1.0.1.
+- [knitr](https://yihui.org/knitr/). Xie, Y. (2020). knitr: A General-Purpose Package for Dynamic Report Generation in R. R package version 1.28.
+
+This app began as a project in a graduate course taught by [Allison Horst](https://www.allisonhorst.com/).
+

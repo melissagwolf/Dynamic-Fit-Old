@@ -1,0 +1,103 @@
+---
+title: "My App"
+runtime: shiny
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    source_code: embed
+    theme: cosmo
+always_allow_html: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(rmarkdown)
+library(tidyverse)
+library(shiny)
+library(flexdashboard)
+```
+
+
+Sidebar {.sidebar}
+=====================================
+
+```{r inputs}
+fileInput("model_syntax", "Input Model Syntax",
+          placeholder = ".txt file",
+          accept = c("text",
+                     ".txt",
+                     "txt"))
+
+helpText("This may take a few minutes.
+         Please only press submit once.")
+
+actionButton("go", "Submit")
+```
+
+```{r rename}
+#Name inputs
+model <- eventReactive(input$go,{input$model_syntax})
+```
+
+```{r}
+char <- eventReactive(input$go,{
+ 
+ Mod <- utils::read.delim(model()$datapath, header = FALSE)   
+ Mod_C <- base::as.character(Mod$V1)
+  
+ V1 <- (c("F2 =~ 0.445 * x2","F2 =~ 0.479 * x13"))
+ mod <- data.frame(V1)
+ 
+ rbind(Mod_C,mod)
+})
+
+df <- eventReactive(input$go,{
+ 
+ Mod <- utils::read.delim(model()$datapath, header = FALSE)   
+  
+ V1 <- (c("F2 =~ 0.445 * x2","F2 =~ 0.479 * x13"))
+ mod <- data.frame(V1)
+ 
+ rbind(Mod,mod)
+})
+```
+
+Example
+=====================================  
+
+Row {.tabset}
+-----------------------------------------------------------------------
+
+### Model Input Dataframe
+
+```{r}
+renderPrint({
+  Mod <- utils::read.delim(model()$datapath, header = FALSE)
+  base::as.character(Mod$V1)
+})
+```
+
+### DF rbind
+
+```{r}
+renderTable({
+  df()
+})
+```
+
+### Model Input Character
+
+```{r}
+renderPrint({
+  utils::read.delim(model()$datapath, header = FALSE)
+})
+```
+
+### Character rbind
+
+```{r}
+renderTable({
+  char()
+})
+```
+

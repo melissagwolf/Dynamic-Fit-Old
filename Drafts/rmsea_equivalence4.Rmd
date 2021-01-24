@@ -1,0 +1,349 @@
+---
+title: "Dynamic Model Fit"
+runtime: shiny
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    source_code: embed
+    theme: sandstone
+always_allow_html: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+library(rmarkdown)
+library(shiny)
+library(shinythemes)
+library(flexdashboard)
+library(knitr)
+library(tools)
+library(ggplot2)
+
+#List aesthetics first
+```
+
+<style type="text/css">
+
+body {
+  font-family: Palatino;
+}
+
+.shiny-output-error-validation {
+        color: #ff0000;
+      }
+
+</style>
+
+<!-- Search Engine Optimization -->
+<html>
+<head>
+<title>Dynamic Fit Index Cutoffs for CFA Models</title>
+
+<meta name="description" content="Derive dynamic fit index cutoffs that are adaptively tailored to the specific factor model and data being evaluated."/>
+</head>
+</html>
+
+<!-- Global site tag (gtag.js) - Google Analytics -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=UA-167733193-2"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'UA-167733193-2');
+</script>
+
+```{r design}
+fluidPage(theme = shinytheme("sandstone"))
+
+options(shiny.sanitize.errors = FALSE)
+```
+
+Sidebar {.sidebar}
+=====================================
+
+This app uses equivalence testing to return a range of RMSEA values that can be used to assess model fit for structural equation models.
+
+\  
+
+```{r inputs}
+numericInput("sampsize", "Input Sample Size", value=NULL, min=1)
+
+numericInput("chisq", "Input Model Chi-Square", value=NULL, min=.00000001)
+
+numericInput("defre", "Input Model Degrees of Freedom", value=NULL, min=1)
+
+numericInput("chisqb", "Input Baseline Chi-Square", value=NULL, min=.00000001)
+
+numericInput("parms", "Input number of parameters", value=NULL, min=1)
+
+actionButton("go", "Submit")
+```
+
+```{r rename}
+#Name inputs
+N <- eventReactive(input$go,{input$sampsize})
+TML <- eventReactive(input$go,{input$chisq})
+DF <- eventReactive(input$go,{input$defre})
+TMLI <- eventReactive(input$go,{input$chisqb})
+P <- eventReactive(input$go,{input$parms})
+```
+
+```{r function}
+ncp_chi2 <- function(alpha,T_ml,df){
+  
+  T_ml <- TML()
+  df <- DF()
+  
+  alpha <- .05
+  
+  z=qnorm(1-alpha)
+  z2=z*z 
+  z3=z2*z 
+  z4=z3*z 
+  z5=z4*z
+  sig2=2*(2*T_ml-df+2)
+  sig=sqrt(sig2)
+  sig3=sig*sig2
+  sig4=sig2*sig2
+  sig5=sig4*sig
+  sig6=sig2*sig4
+  
+  delta=T_ml-df+2+sig*
+    (
+      z+(z2-1)/sig-z/sig2 + 2*(df-1)*(z2-1)/(3*sig3)
+      +( -(df-1)*(4*z3-z)/6+(df-2)*z/2 )/sig4
+      +4*(df-1)*(3*z4+2*z2-11)/(15*sig5)
+      +(
+        -(df-1)*(96*z5+164*z3-767*z)/90-4*(df-1)*(df-2)*(2*z3-5*z)/9
+        +(df-2)*z/2
+      )/sig6
+    )
+  
+  delta=max(delta,0)
+  
+  return(delta)
+}
+```
+
+```{r}
+rmsea_results <- eventReactive(input$go,{
+  
+  n <- N()-1
+  T_ml <- TML()
+  df <- DF()
+  
+  #T-size RMSEA#;
+  delta_t <- ncp_chi2(.05,T_ml,df)
+  RMSEA_t <- sqrt(delta_t/(df*n))
+  
+  #Recalculate Bins based on Model Characteristics#
+  
+  RMSEA_e01=exp(
+    1.34863-.51999*log(df)+.01925*log(df)*log(df)-.59811*log(n)+.00902*sqrt(n)+.01796*log(df)*log(n))
+  
+  
+  RMSEA_e05=exp(2.06034-.62974*log(df)+.02512*log(df)*log(df)-.98388*log(n)
+                +.05442*log(n)*log(n)-.00005188*n+.05260*log(df)*log(n))
+  
+  
+  RMSEA_e08=exp(2.84129-.54809*log(df)+.02296*log(df)*log(df)-.76005*log(n)
+                +.10229*log(n)*log(n)-1.11167*(n^.2)+.04845*log(df)*log(n))
+  
+  
+  RMSEA_e10=exp(2.36352-.49440*log(df)+.02131*log(df)*log(df)-.64445*log(n)
+                +.09043*log(n)*log(n)-1.01634*(n^.2)+.04422*log(df)*log(n))
+  
+  
+  cutoff=cbind(RMSEA_e01, RMSEA_e05, RMSEA_e08, RMSEA_e10,RMSEA_t)
+  cutoff_3=round(cutoff,3)
+  
+  return(cutoff_3)
+})
+```
+
+```{r}
+cfi_results <- eventReactive(input$go,{
+  
+  #Parms
+  n <- N()-1
+  T_ml <- TML()
+  df <- DF()
+  T_mli <- TMLI()
+  p <- P()
+  df_i <- p*(p-1)/2
+  alpha <- .05
+  
+  #T-size CFI
+  
+  delta_t=ncp_chi2(alpha/2, T_ml,df);
+  delta_it=ncp_chi2(1-alpha/2, T_mli,df_i);
+  CFI_t=1-max(delta_t,0)/max(delta_t,delta_it,0);
+  
+  ##
+  
+  CFI_e99=1-exp(
+    4.67603-.50827*log(df)+.87087*(df^(1/5))-.59613*((df_i)^(1/5))-1.89602*log(n)
+    + .10190*((log(n))^2)+ .03729*log(df)*log(n)
+  );
+  #corresponding to R-square=.9836;
+  
+  CFI_e95=1-exp(
+    4.12132-.46285*log(df)+.52478*(df^(1/5))-.31832*((df_i)^(1/5))-1.74422*log(n)
+    +.13042*((log(n))^2)-.02360*(n^(1/2))+.04215*log(df)*log(n)
+  );
+  #corresponding to R-square=.9748;
+  
+  CFI_e92=1-exp(
+    6.31234-.41762*log(df)+.01554*((log(df))^2)-.00563*((log(df_i))^2)-1.30229*log(n)
+    +.19999*((log(n))^2)-2.17429*(n^(1/5))+.05342*log(df)*log(n)-.01520*log(df_i)*log(n)
+  );
+  #corresponding to R-square=.9724;
+  
+  
+  CFI_e90=1-exp(
+    5.96633-.40425*log(df)+.01384*((log(df))^2)-.00411*((log(df_i))^2)-1.20242*log(n)
+    +.18763*((log(n))^2)-2.06704*(n^(1/5))+.05245*log(df)*log(n)-.01533*log(df_i)*log(n)
+  );
+  #corresponding to R-square=.9713;
+  
+  cutoff <- cbind(CFI_e90, CFI_e92, CFI_e95, CFI_e99, CFI_t)
+  cutoff_3 <- round(cutoff,3)
+  
+  return(cutoff_3)
+})
+```
+
+Equivalence Testing
+=====================================  
+
+Row {.tabset} 
+-----------------------------------------------------------------------
+
+### RMSEA
+
+This is your T-size RMSEA:
+<div>
+```{r}
+renderTable({
+  cutoff_3 <- rmsea_results()
+  cutoff_3[5]
+},
+    digits=3, align='l', colnames = FALSE, width="auto",
+    bordered = TRUE)
+```
+</div>
+
+These are the adjusted RMSEA cutoff values derived from equivalence testing:
+
+<div>
+```{r fit-table}
+#Generate dynamic model fit index cutoffs and table
+renderTable({
+
+  #The formula is from Venables 1975 for obtaining the noncentrality #of a non-central chi-square distribution;
+
+cutoff_3 <- rmsea_results()
+
+good <- c("Excellent:","Close:","Fair:","Mediocre:","Poor:")
+
+one <- paste(cutoff_3[1],"or below")
+two <- paste(cutoff_3[1],"to",cutoff_3[2])
+three <- paste(cutoff_3[2],"to",cutoff_3[3])
+four <- paste(cutoff_3[3],"to",cutoff_3[4])
+five <- paste(cutoff_3[4],"or above")
+
+vals <- rbind(one,two,three,four,five)
+
+as.data.frame(cbind(good,vals))
+  },
+    digits=3, align='l', colnames = FALSE, width="auto",
+    bordered = TRUE)
+
+```
+</div>
+
+### CFA
+
+This is your T-size CFI:
+<div>
+```{r}
+renderTable({
+  cutoff_3 <- cfi_results()
+  cutoff_3[5]
+},
+    digits=3, align='l', colnames = FALSE, width="auto",
+    bordered = TRUE)
+```
+</div>
+
+### Figure
+
+This is a plot comparing your T-size RMSEA value to the adjusted RMSEA cutoff values derived from equivalence testing:
+
+```{r}
+renderPlot({
+  cutoff_3 <- rmsea_results()
+  
+  e <- max(cutoff_3[4],cutoff_3[5])
+  e
+
+  x <- cutoff_3[1:4]
+  x
+  
+  m <- e+(cutoff_3[1]-0)
+  m
+  
+  ex <- mean(c(.00001,x[1]))
+  cl <- mean(c(x[1],x[2]))
+  fa <- mean(c(x[2],x[3]))
+  me <- mean(c(x[3],x[4]))
+  po <- mean(c(x[4],m))
+  
+  ggplot(data.frame(x), aes(x=x, y=0)) +
+    geom_point(alpha=0)  +
+    annotate("segment",x=0,xend=m, y=0, yend=0, size=1,col="grey50") +
+    annotate("segment",x=0,xend=0, y=-0.1,yend=0.1, size=1,col="grey50") +
+    annotate("segment",x=m,xend=m, y=-0.1,yend=0.1, size=1,col="grey50") +
+    annotate("segment",x=x[1],xend=x[1], y=-0.1,yend=0.1, size=1,col="grey50") +
+    annotate("segment",x=x[2],xend=x[2], y=-0.1,yend=0.1, size=1,col="grey50") +
+    annotate("segment",x=x[3],xend=x[3], y=-0.1,yend=0.1, size=1,col="grey50") +
+    annotate("segment",x=x[4],xend=x[4], y=-0.1,yend=0.1, size=1,col="grey50") +
+    annotate("segment",x=cutoff_3[5],xend=cutoff_3[5],y=-0.1,yend=.3, size=1, col="tomato4")+
+    annotate("text",x=cutoff_3[5],y=.6,label=paste("T-size \n RMSEA \n",cutoff_3[5]),
+             col="tomato4", size=4.5)+
+    annotate("text",x=ex,y=-.5,label="Excellent",size=4.5)+
+    annotate("text",x=cl,y=-.5,label="Close",size=4.5)+
+    annotate("text",x=fa,y=-.5,label="Fair",size=4.5)+
+    annotate("text",x=me,y=-.5,label="Mediocre",size=4.5)+
+    annotate("text",x=po,y=-.5,label="Poor",size=4.5)+
+    geom_text(aes(label = x),col="grey20", position=position_nudge(y=-.2),size=4.5) +
+    scale_x_continuous(limits = c(0,m)) +
+    scale_y_continuous(limits = c(-1,1)) +
+    scale_color_manual(values = unname(colours)) + 
+    theme(panel.background = element_blank(),
+          axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          axis.title = element_blank())
+})
+```
+
+
+### References
+
+To cite the ideas behind dynamic fit index cutoff values:
+
+- [McNeish, D.](https://sites.google.com/site/danielmmcneish/home) & [Wolf, M. G.](https://www.melissagwolf.com/) (2020, July 7). Dynamic Fit Index Cutoffs for Confirmatory Factor Analysis Models. https://doi.org/10.31234/osf.io/v8yru
+
+    - *Paper is currently under review*
+
+To cite the values generated by this app:
+
+- [Wolf, M. G.](https://www.melissagwolf.com/) & [McNeish, D.](https://sites.google.com/site/danielmmcneish/home) (2020). Dynamic Model Fit. R Shiny application version 1.0.1.
+
+    - *An accompanying R package is under development*
+    
+The equivalence testing method for structural equation modeling was introduced by Yuan, et. al.  The code to generate the T-size RMSEA was provided by the authors and can be accessed [here](https://www3.nd.edu/~kyuan/EquivalenceTesting/T-size_RMSEA_CFI.R).  To cite the equivalence testing method:
+
+- Yuan, K.-H., Chan, W., Marcoulides, G. A., & Bentler, P. M. [(2016)](https://www.researchgate.net/publication/283805905_Assessing_Structural_Equation_Models_by_Equivalence_Testing_With_Adjusted_Fit_Indexes). Assessing structural equation models by equivalence testing with adjusted fit indexes. *Structural Equation Modeling, 23*(3), 319–330.
