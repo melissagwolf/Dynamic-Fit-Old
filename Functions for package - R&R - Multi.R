@@ -1,30 +1,29 @@
-####### String #########
+################
+##### Test #####
+################
+
+####### String (Normal app input) ########
 
 model <- "F1 =~ .705*x1 + .445*x2 + .515*x3 + .373*x4 + .497*x5
 F2 =~ .489*x4 + .595*x6 + .507*x7 + .559*x8 + .532*x9 + .638*x10
 F3 =~ .386*x9 + .546*x11 + .542*x12 + .479*x13 + .570*x14 + .628*x15
-
 F1 ~~ .485*F2
 F1 ~~ .657*F3
 F2 ~~ .196*F3
-
 x1 ~~ .55*x12"
-
 n <- 200
 
-###### Single Error #######
+###### Single Error (to test error) #######
 
 single <- "F1 =~ .705*x1 + .445*x2 + .515*x3 + .373*x4 + .497*x5"
 dfs <- sim_standardized(single,n,latent=F,errors=F)
 modcleans <- cleanmodel(single)
 objs <- cfa(modcleans,dfs)
 
-####### Lavaan #########
+####### Lavaan ########
 
 df <- sim_standardized(model,n,latent=F,errors=F)
-
 modclean <- cleanmodel(model)
-
 obj <- cfa(modclean,df)
 
 ########## Run #############
@@ -32,7 +31,13 @@ obj <- cfa(modclean,df)
 cfaHB(model,n,string=T,plot=T)
 cfaHB(obj,plot=T)
 
+########################################
+##### Functions Below (Don't edit) #####
+########################################
+
+################
 ### Packages ###
+################
 
 library(lavaan)
 library(tidyverse)
@@ -42,7 +47,9 @@ library(patchwork)
 library(purrr)
 library(stringr)
 
+#######################################
 ########## HELPER FUNCTIONS ###########
+#######################################
 
 #### Function to create model statement without numbers from user model (for input) ####
 #Copy from OG
@@ -341,11 +348,11 @@ DGM_Multi_HB <- function(model){
   Mods <- model   
   #Mod_C <- base::as.character(Mods$V1) 
   
-  #multi_mod <- lapply(mod, function(x) rbind(Mods,mod[seq(x), ,drop = FALSE]) %>%
+  #multi_mod <- lapply(mod, function(x) rbind(Mod_C,mod[seq(x), ,drop = FALSE]) %>%
   #                      data.frame() %>% 
   #                      pull(V1))
   
-  #This made you miserable. Shiny was struggling with \n at the end of strings here, for some reason.
+  #This made you miserable. Shiny/R was struggling with \n at the end of strings here, for some reason.
   
   #Create a list for every row in the mod object (misspecifications)
   #For each element, bind the misspecification to the OG model statement sequentially
@@ -502,7 +509,10 @@ multi_df_HB <- function(model,n){
 
 cfa_lavmod <- function(model){
   
+  #Extract standardized solution from lavaan object
   lav <- lavaan::standardizedSolution(model)
+  
+  #Create model statement
   ss_mod <- suppressMessages(lav %>% 
                                dplyr::filter(lhs != rhs) %>% 
                                dplyr::group_by(lhs,op) %>% 
@@ -513,6 +523,7 @@ cfa_lavmod <- function(model){
                                tidyr::unite("mod",lhs,op,rhs,sep="") %>% 
                                dplyr::pull(mod))
   
+  #Collapse into one string because my other functions expect that
   mod <- paste(ss_mod, sep="", collapse="\n") 
   
   return(mod)
@@ -523,6 +534,8 @@ cfa_lavmod <- function(model){
 #SPECIFIC TO R PACKAGE
 
 cfa_n <- function(model){
+  
+  #Extract n from lavaan object
   n <- unlist(model@SampleStats@nobs)
   return(n)
 }
@@ -531,12 +544,16 @@ cfa_n <- function(model){
 ############ cfaHB.R FUNCTION ###############
 #############################################
 
-cfaHB <- function(model,n=NULL,plot=FALSE,string=F){
+cfaHB <- function(model,n=NULL,plot=FALSE,string=FALSE){
   
+  #If string, expect string (a la Shiny app)
   if(string){
     model=model
     n=n
   }else{
+  #Use these functions to convert to string (input is a lavaan object)
+  #Probably what we should expect for people using R
+  #need 'n' first because otherwise model will overwrite  
     n <- cfa_n(model)
     model <- cfa_lavmod(model)
   }
@@ -556,10 +573,12 @@ cfaHB <- function(model,n=NULL,plot=FALSE,string=F){
   if ( nrow(multi_num_HB(model)) < (number_factor(model)-1)){
     stop("dynamic Error: There are not enough free items to produce all misspecification levels.")
   }
-
+  
+  #Create list to store outputs (table and plot)
   res <- list(input=as.list(environment),
               output=list())
-    
+  
+  #Run simulation  
   results <- multi_df_HB(model,n)
   
   #For each list element (misspecification) compute the cutoffs
@@ -623,6 +642,7 @@ cfaHB <- function(model,n=NULL,plot=FALSE,string=F){
            Magnitude=round(Magnitude,digits=3)) %>% 
     slice(rep(1:n(),each=2)))
   
+  #Clean cross-loading magnitude
   even <- seq_len(nrow(mag))%%2
   mag2 <- cbind(mag,even) %>% 
     mutate(Magnitude=ifelse(even==0," ",Magnitude)) %>%
@@ -637,8 +657,10 @@ cfaHB <- function(model,n=NULL,plot=FALSE,string=F){
     tidyr::unite(Cut,levelnum,cut,sep=": ") %>% 
     tibble::column_to_rownames(var='Cut')
   
+  #Put into list
   res$output$Cutoffs <- Final_Table
   
+  #If user selects plot = T
   if(plot){
     #For each list element (misspecification) compute the cutoffs
     misspec_sum <- purrr::map(results,~dplyr::summarise(.,SRMR_M=quantile(SRMR_M, c(.05,.1)),
@@ -756,16 +778,20 @@ cfaHB <- function(model,n=NULL,plot=FALSE,string=F){
                       plot_annotation(title=paste("Level", x))
                     & theme(legend.position = 'bottom'))
     
+    #Put into list
     res$output$Plots <- plots
     
   }
   
+  #Create object (necessary for subsequent print statement)
   class(res) <- 'cfaHB'
   
   return(res)
   
 }
 
+#Print suppression/organization statement for list
+#Needs same name as class, not function name
 print.cfaHB <- function(res){
   
   cat("Your DFI cutoffs: \n")
@@ -777,5 +803,6 @@ print.cfaHB <- function(res){
     print(res$output$Plots)
   }
   
+  #Hides this function
   invisible()
 }
