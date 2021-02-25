@@ -524,7 +524,7 @@ cfa_lavmod <- function(model){
                                dplyr::pull(mod))
   
   #Collapse into one string because my other functions expect that
-  mod <- paste(ss_mod, sep="", collapse="\n") 
+  mod <- base::paste(ss_mod, sep="", collapse="\n") 
   
   return(mod)
   
@@ -536,7 +536,7 @@ cfa_lavmod <- function(model){
 cfa_n <- function(model){
   
   #Extract n from lavaan object
-  n <- unlist(model@SampleStats@nobs)
+  n <- base::unlist(model@SampleStats@nobs)
   return(n)
 }
 
@@ -773,7 +773,7 @@ cfaHB <- function(model,n=NULL,plot=FALSE,string=FALSE){
     plots_combo <- lapply(seq(length(plot)),function(x) c(SRMR_plot[x],RMSEA_plot[x],CFI_plot[x]))
     
     #Add a collective legend and title with the level indicator
-    plots <- lapply(seq(length(plots_combo)), function(x) wrap_plots(plots_combo[[x]])+
+    plots <- lapply(seq(length(plots_combo)), function(x) patchwork::wrap_plots(plots_combo[[x]])+
                       plot_layout(guides = "collect")+
                       plot_annotation(title=paste("Level", x))
                     & theme(legend.position = 'bottom'))
@@ -794,15 +794,15 @@ cfaHB <- function(model,n=NULL,plot=FALSE,string=FALSE){
 #Needs same name as class, not function name
 print.cfaHB <- function(res){
   
-  cat("Your DFI cutoffs: \n")
-  print(res$output$Cutoffs)
+  base::cat("Your DFI cutoffs: \n")
+  base::print(res$output$Cutoffs)
   
   if(!is.null(res$output$Plots)){
     
-    cat("\n The distributions for each level are in the Plots tab \n")
-    print(res$output$Plots)
+    base::cat("\n The distributions for each level are in the Plots tab \n")
+    base::print(res$output$Plots)
   }
   
   #Hides this function
-  invisible()
+  base::invisible()
 }
