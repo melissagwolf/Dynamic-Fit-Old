@@ -4,20 +4,20 @@
 
 ####### String (Normal app input) ########
 
-model <- "F1 =~ .705*x1 + .445*x2 + .515*x3 + .373*x4 + .497*x5
+model <- "F1 =~ .705*x1 + .445*x2 + .515*x3 + .373*x4 + .497*x5"
+n <- 200
+
+####### Multi Error (to test error) ######
+
+multi <- "F1 =~ .705*x1 + .445*x2 + .515*x3 + .373*x4 + .497*x5
 F2 =~ .489*x4 + .595*x6 + .507*x7 + .559*x8 + .532*x9 + .638*x10
 F3 =~ .386*x9 + .546*x11 + .542*x12 + .479*x13 + .570*x14 + .628*x15
 F1 ~~ .485*F2
 F1 ~~ .657*F3
 F2 ~~ .196*F3
 x1 ~~ .55*x12"
-n <- 200
-
-###### Single Error (to test error) #######
-
-single <- "F1 =~ .705*x1 + .445*x2 + .515*x3 + .373*x4 + .497*x5"
-dfs <- sim_standardized(single,n,latent=F,errors=F)
-modcleans <- cleanmodel(single)
+dfs <- sim_standardized(multi,n,latent=F,errors=F)
+modcleans <- cleanmodel(multi)
 objs <- cfa(modcleans,dfs)
 
 ####### Lavaan ########
@@ -28,8 +28,8 @@ obj <- cfa(modclean,df)
 
 ########## Run #############
 
-cfaHB(model,n,string=T,plot=T)
-cfaHB(obj,plot=T)
+cfaOne(model,n,string=T,plot=T)
+cfaOne(obj,plot=T)
 
 ########################################
 ##### Functions Below (Don't edit) #####
@@ -129,13 +129,13 @@ defre <- function(model,n){
   return(tot.parms-paths)
 }
 
-### Multi-factor: Function to see which items are available ###
+### One-factor: Function to see which items are available ###
 ## This name is new!!!
 
-multi_num_HB <- function(model){
+one_num <- function(model){
   
   #Rename (just to be consistent with shiny app)
-  Mod_C <- model   
+  Mod_C <- model 
   
   #Lavaanify it - have lavaan tell us the parameters
   lav_file <- lavaan::lavaanify(Mod_C, fixed.x=FALSE) %>%
@@ -146,15 +146,6 @@ multi_num_HB <- function(model){
     dplyr::filter(op=="=~") %>%
     dplyr::select(lhs) %>%
     base::unique()
-  
-  #Identify number of items per factor
-  num_items <- lav_file %>%
-    dplyr::filter(op=="=~") %>%
-    dplyr::group_by(lhs) %>%
-    dplyr::count() %>%
-    dplyr::ungroup() %>%
-    base::as.data.frame() %>%
-    `colnames<-`(c("lhs","Original"))
   
   #Identify any items that already have an error covariance
   items_covariance <- factors %>%
@@ -169,7 +160,7 @@ multi_num_HB <- function(model){
     dplyr::select(-op,-test) %>%
     dplyr::mutate(lhs=NA,op=NA,ustart=NA)
   
-  #Isolate the items that do not already have an error covariance or cross-loading
+  #Isolate the items that do not already have an error covariance
   solo_items <- lav_file %>%
     dplyr::select(lhs,op,rhs,ustart) %>%
     base::rbind(items_covariance) %>%
@@ -177,191 +168,99 @@ multi_num_HB <- function(model){
     dplyr::group_by(rhs) %>%
     dplyr::add_tally() %>%
     dplyr::filter(n==1) %>%
-    dplyr::ungroup()
-  
-  #Count number of items remaining per factor
-  remaining <- solo_items %>%
-    dplyr::group_by(lhs) %>%
-    dplyr::select(-n) %>%
-    dplyr::count() %>%
-    dplyr::ungroup() %>%
-    dplyr::full_join(num_items,by="lhs") %>% 
-    base::as.data.frame() %>%
-    `colnames<-`(c("lhs","Remaining","Original"))
-  
-  #Add in factor loadings, group by number of items per factor (>2 or 2)
-  #And sort factor loadings magnitude within group 
-  itemoptions <- solo_items %>%  
-    dplyr::full_join(remaining,by="lhs") %>% 
-    dplyr::mutate(priority=ifelse(Original>2 & Remaining !="NA","Three","Two")) %>% 
-    dplyr::group_by(priority) %>% 
-    dplyr::arrange(abs(ustart), .by_group=TRUE) %>% 
     dplyr::ungroup() %>% 
-    dplyr::select(lhs,rhs,ustart,priority) %>% 
-    base::as.data.frame() %>%
-    dplyr::as_tibble() %>%
-    `colnames<-`(c("lhs","Item","Loading","Priority"))
+    arrange(abs(ustart))
   
-  return(itemoptions)
+  return(solo_items)
 }
 
-#### Multi-Factor: Function to identify available items and loading magnitude ####
+
+
+#### One-Factor: Function to create misspecification statement ####
 #This function name is new!!!!
 
-multi_add_HB <- function(model){
+one_add <- function(model){
   
-  #read in the model
-  Mod_C <- model
+  #Read in available items
+  itemoptions <- one_num(model)
   
-  #Lavaanify it - have lavaan tell us the parameters
-  lav_file <- lavaan::lavaanify(Mod_C, fixed.x=FALSE) %>%
-    dplyr::filter(.data$lhs != .data$rhs)
+  #Count number of available items
+  num_i <- base::nrow(itemoptions)
   
-  #read in number of factors
-  num_fact <- number_factor(model)
-  
-  #read in viable items from each factor
-  itemoptions <- multi_num_HB(model)
-  
-  #select lowest loading from each factor, in order of magnitude
-  crosses <- itemoptions %>% 
-    dplyr::group_by(lhs) %>% 
-    dplyr::slice_min(base::abs(Loading)) %>% 
-    dplyr::ungroup() %>% 
-    dplyr::arrange(Priority,base::abs(Loading)) %>% 
-    dplyr::slice(1:(num_fact-1))
-  
-  #identify all factor names (again)
-  factors <- lav_file %>%
-    dplyr::filter(op=="=~") %>%
-    dplyr::select(lhs) %>%
-    base::unique()
-  
-  #Compute Coefficient H for each factor
-  suppressMessages(Coef_H <- lavaan::lavaanify(Mod_C, fixed.x = FALSE) %>%
-    dplyr::filter(lhs != rhs) %>%
-    dplyr::filter(op == "=~") %>%
-    dplyr::mutate(L_Sq=ustart^2) %>%
-    dplyr::mutate(E_Var=1-L_Sq) %>%
-    dplyr::mutate(Div=L_Sq/E_Var) %>%
-    dplyr::group_by(lhs) %>%
-    dplyr::summarise(Sum=sum(Div)) %>%
-    dplyr::mutate(H=((1+(Sum^-1))^-1)) %>%
-    dplyr::select(-Sum) %>%
-    dplyr::arrange(-H) %>%
-    `colnames<-`(c("rhs","H")))
-  
-  #isolate factors and factor correlations
-  factcor1 <- factors %>%
-    dplyr::mutate(type="Factor") %>%
-    dplyr::full_join(lav_file, by = "lhs") %>%
-    dplyr::mutate(type=recode(type, .missing ="Error Correlation")) %>%
-    dplyr::select(lhs,op,rhs,ustart,type) %>%
-    dplyr::filter(op=="~~" & type=="Factor")
-  
-  #flip in reverse so we get a list of all factors in one column
-  factcor2 <- factors %>%
-    dplyr::mutate(type="Factor") %>%
-    dplyr::full_join(lav_file, by = "lhs") %>%
-    dplyr::select(lhs,op,rhs,ustart,type) %>%
-    dplyr::filter(op=="~~" & type=="Factor") %>%
-    `colnames<-`(c("rhs","op","lhs","ustart","type")) %>%
-    dplyr::select(lhs,op,rhs,ustart,type)
-  
-  #Isolate items
-  dup1 <- factcor1 %>%
-    dplyr::full_join(factcor2, by = c("lhs", "op", "rhs", "ustart", "type")) %>% 
-    dplyr::full_join(crosses,by="lhs") %>% 
-    dplyr::full_join(Coef_H,by="rhs") %>% 
-    dplyr::filter(Item != "NA") %>% 
-    dplyr::arrange(abs(Loading))
-  
-  #Run twice for cleaning later
-  dup2 <- dup1
-  
-  #Manipulate to create model statement
-  #Need to add factor correlation statement where lowest comes first
-  #So that we can remove from contention once a factor correlation is added
-  setup <- base::rbind(dup1,dup2) %>%  
-    dplyr::mutate(lhs_1=lhs,
-                  rhs_1=rhs,
-                  f_min=base::pmin(lhs_1,rhs_1),
-                  f_max=base::pmax(lhs_1,rhs_1)) %>% 
-    tidyr::unite(facts,c("f_min","f_max")) %>% 
-    dplyr::select(-lhs_1,-rhs_1) %>% 
-    dplyr::distinct(lhs,op,rhs,ustart,type,Item,Loading,Priority,H,.keep_all = TRUE)
-  
-  
-  #Rename for iteration
-  setup_copy <- setup
-  
-  #Create empty dataframe
-  cleaned <- base::data.frame(base::matrix(nrow=0,ncol=10)) %>% 
-    `colnames<-`(names(setup)) %>% 
-    dplyr::mutate_if(is.logical, as.character)
-  
-  #Cycle through to grab F-1 misspecifications
-  #Select the highest H for first item I (for crossloading)
-  #Use anti_join to remove that factor correlation from the list for the next item
-  for (i in unique(setup_copy$Item)){
-    cleaned[i,] <- setup_copy %>% 
-      dplyr::filter(Item==i) %>% 
-      dplyr::slice_max(H)
-    setup_copy <- dplyr::anti_join(setup_copy,cleaned,by="facts")
+  #Select items for misspecification depending on number of available items
+  if(num_i==4){
+    num_m <- itemoptions %>% 
+      dplyr::slice(1:2)
+  }else if(num_i==5){
+    num_m <- itemoptions %>% 
+      dplyr::slice(1:4)
+  }else{
+    num_m <- itemoptions %>% 
+      dplyr::slice(1:(floor(num_i/2)*2))
   }
   
-  #Prep dtaframe for model statement
-  modinfo <- cleaned %>% 
-    dplyr::mutate(operator="=~",
-                  H=base::as.numeric(H),
-                  Loading=base::as.numeric(Loading),
-                  ustart=base::as.numeric(ustart)) %>% 
-    dplyr::arrange(Priority,Loading,-H) 
+  #Identifiers to separate odds and even rows
+  evenindex <- base::seq(2,base::nrow(num_m),2)
+  oddindex <- base::seq(1,base::nrow(num_m),2)
   
-  #Compute maximum allowable cross loading value
-  Cross_Loading <- modinfo %>% 
-    dplyr::mutate(F1=ustart,
-                  F1_Sq=F1^2,
-                  L1=Loading,
-                  L1_Sq=L1^2,
-                  E=1-L1_Sq) %>% 
-    dplyr::mutate(MaxAllow=((base::sqrt(((L1_Sq*F1_Sq)+E))-(L1*F1))*.95),
-                  MaxAllow2=base::round(MaxAllow,digits=4),
-                  Final_Loading=base::pmin(Loading,MaxAllow2),
-                  times="*") %>% 
-    dplyr::select(rhs,operator,Final_Loading,times,Item) %>% 
-    tidyr::unite("V1",sep=" ")
+  #Separate
+  left <- num_m[evenindex,]
+  right <- num_m[oddindex,] %>% 
+    `colnames<-`(c("lhs_1","op_1","rhs_1","ustart_1","n_1"))
   
-  #return value to append to model statement
-  return(Cross_Loading)
+  #Create misspecification statements
+  Residual_Correlation <- base::cbind(left,right) %>% 
+    dplyr::mutate(cor=.3,
+                  opp="~~",
+                  star="*") %>% 
+    tidyr::unite(V1,c("rhs","opp","cor","star","rhs_1"),sep=" ") %>% 
+    dplyr::select(V1)
+  
+  return(Residual_Correlation)
 }
 
+#### One-factor: Function to create Misspecified DGM ####
 
-#### Multi-factor: Function to create Misspecified DGM given the number of factors ####
-## This name is new!!!
-
-DGM_Multi_HB <- function(model){
+DGM_one <- function(model){
   
-  mod <- multi_add_HB(model)
+  #Count number of available items for number of misspecifications
+  num_m<- base::nrow(one_num(model))
+  
+  #Figure out number of levels given number of available items
+  if(num_m==4){
+    L1 <- 1
+    levels <- L1
+  }else if(num_m==5){
+    L1 <- 1
+    L2 <- 2
+    levels <- base::rbind(L1,L2)
+  }else{
+    L3 <- base::floor(num_m/2)
+    L2 <- base::floor((2*L3)/3)
+    L1 <- base::floor(L3/3)
+    levels <- base::rbind(L1,L2,L3)
+  }
+  
+  #Read in misspecifications
+  mod <- one_add(model)
   
   #Get parameters for true dgm
-  Mods <- model   
+  Mods <- model  
   #Mod_C <- base::as.character(Mods$V1) 
   
-  #multi_mod <- lapply(mod, function(x) rbind(Mod_C,mod[seq(x), ,drop = FALSE]) %>%
-  #                      data.frame() %>% 
-  #                      pull(V1))
-  
-  #This made you miserable. Shiny/R was struggling with \n at the end of strings here, for some reason.
+  #single_mod <- base::lapply(levels, function(x) base::rbind(Mod_C,mod[base::seq(x), ,drop = FALSE]) %>%
+  #                       base::data.frame() %>% 
+  #                       dplyr::pull(V1))
+  #This made you miserable. Shiny was struggling with \n at the end of strings here, for some reason.
   
   #Create a list for every row in the mod object (misspecifications)
   #For each element, bind the misspecification to the OG model statement sequentially
   #Turn it into a dataframe and extract
-  multi_mod <- lapply(seq(nrow(mod)), function(x) rbind(Mods,mod[seq(x), ,drop = FALSE]) %>%
-                        base::data.frame() %>% 
-                        dplyr::pull(V1))
+  single_mod <- base::lapply(levels, function(x) base::rbind(Mods,mod[base::seq(x), ,drop = FALSE]) %>%
+                               base::data.frame() %>% 
+                               dplyr::pull(V1))
   
-  return(multi_mod)
+  return(single_mod)
   
 }
 
@@ -376,22 +275,22 @@ hide_ov <- function(h){
     invokeRestart("muffleWarning")
 }
 
-### Multi-factor: Simulate fit indices for misspecified model for all levels ###
+### One-factor: Simulate fit indices for misspecified model for all levels ###
 ## This name is new!!!
 
-multi_fit_HB <- function(model,n){
+one_fit <- function(model,n){
   
   #Get clean model equation
   mod <- cleanmodel(model)
   
-  #Get parameters for misspecified dgm (this is a list)
-  misspec_dgm <- DGM_Multi_HB(model)
+  #Get parameters for misspecified dgm
+  misspec_dgm <- DGM_one(model)
   
-  #Use max sample size of 2000
-  n <- min(n,2000)
+  #Use max sample size of 10000
+  n <- base::min(n,2000)
   
   #Set seed
-  set.seed(269854)
+  set.seed(649364)
   
   #Simulate one large dataset for each misspecification (use map to apply across each
   #element (set of misspecifications) in the list)
@@ -399,27 +298,27 @@ multi_fit_HB <- function(model,n){
                                                                             latent=FALSE,errors=FALSE))
   
   #Create indicator to split into 500 datasets for 500 reps
-  rep_id_misspec <- rep(1:50,n)
+  rep_id_misspec <- base::rep(1:50,n)
   
-  #Combine indicator with dataset for each element in list
-  dat_rep_misspec <- purrr::map(all_data_misspec,~cbind(.,rep_id_misspec))
+  #Combine indicator with dataset
+  dat_rep_misspec <- purrr::map(all_data_misspec,~base::cbind(.,rep_id_misspec))
   
   #Group and list
-  misspec_data <- purrr::map(dat_rep_misspec,~group_by(.,rep_id_misspec) %>% 
+  misspec_data <- purrr::map(dat_rep_misspec,~dplyr::group_by(.,rep_id_misspec) %>% 
                                tidyr::nest())
   
   #Grab data level of the list
   data <- purrr::map(misspec_data,2)
   
-  #Run 500 cfa for each element in the list
+  #Run 500 cfa
   misspec_cfa <- purrr::map(data, function(x) purrr::map(x, function(y) base::withCallingHandlers(lavaan::cfa(model = mod, data=y, std.lv=TRUE),
-                                                                                                  warning = hide_ov)))
+                                                                                                  warning=hide_ov)))
   
   #Extract fit stats from each rep (list) into a data frame and clean using nested lapply
   #map_dfr returns data frame instead of list
   #for each misspecification level (in the list), access the lavaan objects (x)
   #and extract the fit stats (y) - and return as a df
-  misspec_fit_sum <- purrr::map(misspec_cfa, function(x) purrr::map_dfr(x, function(y) lavaan::fitMeasures(y, c("srmr","rmsea","cfi"))) %>% 
+  misspec_fit_sum <- purrr::map(misspec_cfa, function(x) purrr::map_dfr(x, function(y) lavaan::fitMeasures(y, c("srmr","rmsea","cfi"))) %>%
                                   `colnames<-`(c("SRMR_M","RMSEA_M","CFI_M")) %>%
                                   dplyr::mutate(Type_M="Misspecified"))
   
@@ -429,26 +328,21 @@ multi_fit_HB <- function(model,n){
   
 }
 
-#### Multi_Factor: Function to create True DGM (aka, just the model the user read in) ####
+#### One_Factor: Function to create True DGM (aka, just the model the user read in) ####
 ## This name is new!!
 
-true_fit_HB <- function(model,n){
-  
-  #Can make this faster by only doing it once
-  #Would need to change table. Not sure what would happen to plot.
-  #Already did this
+true_fit_one <- function(model,n){
   
   #Get clean model equation
   mod <- cleanmodel(model)
-  
-  #Get parameters for true DGM
+
   true_dgm <- model
   
   #Use max sample size of 10000
   n <- base::min(n,2000)
   
   #Set Seed
-  set.seed(267326)
+  set.seed(326267)
   
   #Simulate one large dataset  
   all_data_true <- simstandard::sim_standardized(m=true_dgm,n = n*50,
@@ -482,21 +376,21 @@ true_fit_HB <- function(model,n){
   
 }
 
-#### Multi-Factor: Function to combine both model fit stats for all levels into one dataframe ####
+#### One-Factor: Function to combine both model fit stats for all levels into one dataframe ####
 ## New name!!
 
-multi_df_HB <- function(model,n){
+one_df <- function(model,n){
   
   #Use max sample size of 2000
   n <- min(n,2000)
   
   #Get fit stats for misspecified model
-  misspec_fit <- multi_fit_HB(model,n)
+  misspec_fit <- one_fit(model,n)
   
   #Get fit stats for correctly specified model
-  true_fit <- true_fit_HB(model,n)
+  true_fit <- true_fit_one(model,n)
   
-  #Produce final table of fit indices for each level (as a list)
+  #Produce final table by level
   Table <- purrr::map(misspec_fit,~cbind(.,true_fit))
   
   #Final table
@@ -541,10 +435,10 @@ cfa_n <- function(model){
 }
 
 #############################################
-############ cfaHB.R FUNCTION ###############
+############ cfaOne.R FUNCTION ###############
 #############################################
 
-cfaHB <- function(model,n=NULL,plot=FALSE,string=FALSE){
+cfaOne <- function(model,n=NULL,plot=FALSE,string=FALSE){
   
   #If string, expect string (a la Shiny app)
   if(string){
@@ -562,15 +456,15 @@ cfaHB <- function(model,n=NULL,plot=FALSE,string=FALSE){
     stop("dynamic Error: Your model has loadings greater than or equal to 1 (an impossible value). Please use standardized loadings.")
   }
   
-  if (number_factor(model)<2){
-    stop("dynamic Error: You entered a one-factor model.  Use cfaOne instead.")
+  if (number_factor(model)>1){
+    stop("dynamic Error: You entered a multi-factor model.  Use cfaHB instead.")
   }
   
   if (defre(model,n)==0){
     stop("dynamic Error: It is impossible to add misspecifications to a just identified model.")
   }
   
-  if ( nrow(multi_num_HB(model)) < (number_factor(model)-1)){
+  if ( nrow(one_num(model)) < (number_factor(model)-1)){
     stop("dynamic Error: There are not enough free items to produce all misspecification levels.")
   }
   
@@ -579,26 +473,26 @@ cfaHB <- function(model,n=NULL,plot=FALSE,string=FALSE){
               output=list())
   
   #Run simulation  
-  results <- multi_df_HB(model,n)
+  results <- one_df(model,n)
   
   #For each list element (misspecification) compute the cutoffs
-  misspec_sum <- purrr::map(results,~dplyr::summarise(.,SRMR_M=quantile(SRMR_M, c(.05,.1)),
-                                                      RMSEA_M=quantile(RMSEA_M, c(.05,.1)),
-                                                      CFI_M=quantile(CFI_M, c(.95,.9))))
+  misspec_sum <- purrr::map(results,~dplyr::summarise(.,SRMR_M=stats::quantile(SRMR_M, c(.05,.1)),
+                                                      RMSEA_M=stats::quantile(RMSEA_M, c(.05,.1)),
+                                                      CFI_M=stats::quantile(CFI_M, c(.95,.9))))
   
   #For the true model, compute the cutoffs (these will all be the same - just need in list form)
-  true_sum <- purrr::map(results,~dplyr::summarise(.,SRMR_T=quantile(SRMR_T, c(.95,.9)),
-                                                   RMSEA_T=quantile(RMSEA_T, c(.95,.9)),
-                                                   CFI_T=quantile(CFI_T, c(.05,.1))))
+  true_sum <- purrr::map(results,~dplyr::summarise(.,SRMR_T=stats::quantile(SRMR_T, c(.95,.9)),
+                                                   RMSEA_T=stats::quantile(RMSEA_T, c(.95,.9)),
+                                                   CFI_T=stats::quantile(CFI_T, c(.05,.1))))
   
   #Bind each of the misspecified cutoffs to the true cutoffs, listwise
-  Table <- purrr::map(misspec_sum,~cbind(.,true_sum[[1]]) %>% 
+  Table <- purrr::map(misspec_sum,~base::cbind(.,true_sum[[1]]) %>% 
                         dplyr::mutate(SRMR_R=base::round(SRMR_M,3),
                                       RMSEA_R=base::round(RMSEA_M,3),
                                       CFI_R=base::round(CFI_M,3),
                                       SRMR=base::ifelse(SRMR_T<SRMR_M,SRMR_R,"NONE"),
                                       RMSEA=base::ifelse(RMSEA_T<RMSEA_M,RMSEA_R,"NONE"),
-                                      CFI=base::ifelse(CFI_T>CFI_M,CFI_R,"NONE")) %>%
+                                      CFI=base::ifelse(CFI_T>CFI_M,CFI_R,"NONE")) %>% 
                         dplyr::select(SRMR,RMSEA,CFI)) 
   
   #This is to clean up the table for presentation
@@ -606,71 +500,51 @@ cfaHB <- function(model,n=NULL,plot=FALSE,string=FALSE){
   Row2 <- purrr::map_dfr(Table,~dplyr::mutate(.,SRMR_1=SRMR,
                                               RMSEA_1=RMSEA,
                                               CFI_1=CFI) %>%
-                           dplyr::mutate_at(c("SRMR_1","RMSEA_1","CFI_1"),list(lead)) %>% 
+                           dplyr::mutate_at(c("SRMR_1","RMSEA_1","CFI_1"),base::list(lead)) %>% 
                            dplyr::slice(1) %>% 
-                           dplyr::mutate(SRMR=ifelse(is.character(SRMR),SRMR_1,"--"),
-                                         RMSEA=ifelse(is.character(RMSEA),RMSEA_1,"--"),
-                                         CFI=ifelse(is.character(CFI),CFI_1,"--"),
-                                         SRMR=str_replace_all(as.character(SRMR),"0\\.","."),
-                                         RMSEA=str_replace_all(as.character(RMSEA),"0\\.","."),
-                                         CFI=str_replace_all(as.character(CFI),"0\\.",".")) %>%
+                           dplyr::mutate(SRMR=base::ifelse(base::is.character(SRMR),SRMR_1,"--"),
+                                         RMSEA=base::ifelse(base::is.character(RMSEA),RMSEA_1,"--"),
+                                         CFI=base::ifelse(base::is.character(CFI),CFI_1,"--"),
+                                         SRMR=stringr::str_replace_all(base::as.character(SRMR),"0\\.","."),
+                                         RMSEA=stringr::str_replace_all(base::as.character(RMSEA),"0\\.","."),
+                                         CFI=stringr::str_replace_all(base::as.character(CFI),"0\\.",".")) %>% 
                            dplyr::select(SRMR,RMSEA,CFI)) 
   
   #Still cleaning
   #Unlist Table
-  Table_C <- purrr::map_dfr(Table,~dplyr::mutate(.,SRMR=stringr::str_replace_all(as.character(SRMR),"0\\.","."),
-                                                 RMSEA=stringr::str_replace_all(as.character(RMSEA),"0\\.","."),
-                                                 CFI=stringr::str_replace_all(as.character(CFI),"0\\.",".")))
-  
-  #Cleaning
-  Table_C[seq(2,nrow(Table_C),by=2),] <- Row2 
-  
-  #For row names
-  num_fact <- (number_factor(model)-1)
+  Table_C <- purrr::map_dfr(Table,~dplyr::mutate(.,SRMR=stringr::str_replace_all(base::as.character(SRMR),"0\\.","."),
+                                                 RMSEA=stringr::str_replace_all(base::as.character(RMSEA),"0\\.","."),
+                                                 CFI=stringr::str_replace_all(base::as.character(CFI),"0\\.",".")))
+
+  #Cleaning  
+  Table_C[base::seq(2,nrow(Table_C),by=2),] <- Row2 
   
   #Create row names for level
-  Table_C$levelnum <- paste("Level", rep(1:num_fact,each=2))
+  Table_C$levelnum <- base::paste("Level", base::rep(1:(base::nrow(Table_C)/2),each=2))
   
   #Create row names for proportions
-  Table_C$cut <- rep(c("95/5","90/10"))
+  Table_C$cut <- base::rep(c("95/5","90/10"))
   
-  #Add cross-loading magnitude
-  suppressMessages(mag <- multi_add_HB(model) %>% 
-    tidyr::separate(V1,into=c("a","b","Magnitude","d","e"),sep=" ") %>% 
-    select(Magnitude) %>% 
-    mutate(Magnitude=as.numeric(Magnitude),
-           Magnitude=round(Magnitude,digits=3)) %>% 
-    slice(rep(1:n(),each=2)))
-  
-  #Clean cross-loading magnitude
-  even <- seq_len(nrow(mag))%%2
-  mag2 <- cbind(mag,even) %>% 
-    mutate(Magnitude=ifelse(even==0," ",Magnitude)) %>%
-    mutate(Magnitude=str_replace_all(as.character(Magnitude),"0\\.",".")) %>% 
-    select(Magnitude)
-  
-  #Add to table
-  Table_C <- cbind(Table_C,mag2)
-      
   #Add rownames to final table
   Final_Table <- Table_C %>% 
     tidyr::unite(Cut,levelnum,cut,sep=": ") %>% 
-    tibble::column_to_rownames(var='Cut')
+    column_to_rownames(var='Cut')
   
   #Put into list
   res$output$Cutoffs <- Final_Table
   
   #If user selects plot = T
   if(plot){
+    
     #For each list element (misspecification) compute the cutoffs
-    misspec_sum <- purrr::map(results,~dplyr::summarise(.,SRMR_M=quantile(SRMR_M, c(.05,.1)),
-                                                        RMSEA_M=quantile(RMSEA_M, c(.05,.1)),
-                                                        CFI_M=quantile(CFI_M, c(.95,.9))))
+    misspec_sum <- purrr::map(results,~dplyr::summarise(.,SRMR_M=stats::quantile(SRMR_M, c(.05,.1)),
+                                                        RMSEA_M=stats::quantile(RMSEA_M, c(.05,.1)),
+                                                        CFI_M=stats::quantile(CFI_M, c(.95,.9))))
     
     #For the true model, compute the cutoffs (these will all be the same - just need in list form)
-    true_sum <- purrr::map(results,~dplyr::summarise(.,SRMR_T=quantile(SRMR_T, c(.95,.9)),
-                                                     RMSEA_T=quantile(RMSEA_T, c(.95,.9)),
-                                                     CFI_T=quantile(CFI_T, c(.05,.1))))
+    true_sum <- purrr::map(results,~dplyr::summarise(.,SRMR_T=stats::quantile(SRMR_T, c(.95,.9)),
+                                                     RMSEA_T=stats::quantile(RMSEA_T, c(.95,.9)),
+                                                     CFI_T=stats::quantile(CFI_T, c(.05,.1))))
     
     #Select just those variables and rename columns to be the same
     Misspec_dat <- purrr::map(results,~dplyr::select(.,SRMR_M:Type_M) %>% 
@@ -679,10 +553,10 @@ cfaHB <- function(model,n=NULL,plot=FALSE,string=FALSE){
     #Select just those variables and rename columns to be the same
     True_dat <- purrr::map(results,~dplyr::select(.,SRMR_T:Type_T) %>% 
                              `colnames<-`(c("SRMR","RMSEA","CFI","Model")))
-    
+
     #For each element in the list, bind the misspecified cutoffs to the true cutoffs
-    #rbind doesn't work well with lists (needs do.call statement)
-    plot <- lapply(seq(length(Misspec_dat)),function(x) dplyr::bind_rows(Misspec_dat[x],True_dat[x]))
+    #rbind doesn't work well with lists (needs do.call statement)    
+    plot <- base::lapply(base::seq(base::length(Misspec_dat)),function(x) dplyr::bind_rows(Misspec_dat[x],True_dat[x]))
     
     #Plot SRMR. Need map2 and data=.x (can't remember why).
     SRMR_plot <- purrr::map2(plot,misspec_sum,~ggplot(data=.x,aes(x=SRMR,fill=Model))+
@@ -768,23 +642,22 @@ cfaHB <- function(model,n=NULL,plot=FALSE,string=FALSE){
                                     legend.title = element_blank(),
                                     legend.box = "vertical"))
     
-    
     #Create a list with the plots combined for each severity level
-    plots_combo <- lapply(seq(length(plot)),function(x) c(SRMR_plot[x],RMSEA_plot[x],CFI_plot[x]))
+    plots_combo <- base::lapply(base::seq(base::length(plot)),function(x) c(SRMR_plot[x],RMSEA_plot[x],CFI_plot[x]))
     
     #Add a collective legend and title with the level indicator
-    plots <- lapply(seq(length(plots_combo)), function(x) patchwork::wrap_plots(plots_combo[[x]])+
-                      plot_layout(guides = "collect")+
-                      plot_annotation(title=paste("Level", x))
-                    & theme(legend.position = 'bottom'))
-    
+    plots <- base::lapply(base::seq(base::length(plots_combo)), function(x) patchwork::wrap_plots(plots_combo[[x]])+
+                            plot_layout(guides = "collect")+
+                            plot_annotation(title=paste("Level", x))
+                          & theme(legend.position = 'bottom'))
+  
     #Put into list
     res$output$Plots <- plots
     
   }
   
   #Create object (necessary for subsequent print statement)
-  class(res) <- 'cfaHB'
+  class(res) <- 'cfaOne'
   
   return(res)
   
@@ -792,7 +665,7 @@ cfaHB <- function(model,n=NULL,plot=FALSE,string=FALSE){
 
 #Print suppression/organization statement for list
 #Needs same name as class, not function name
-print.cfaHB <- function(res){
+print.cfaOne <- function(res){
   
   base::cat("Your DFI cutoffs: \n")
   base::print(res$output$Cutoffs)
