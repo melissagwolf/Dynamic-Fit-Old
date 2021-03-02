@@ -166,7 +166,9 @@ equiv_cutoffs <- function(p,T_ml,df,T_mli,n){
   return(cutoff_3)
 }
 
+###########################
 #### Lavaan extraction ####
+###########################
 
 equiv_n <- function(obj){
   n <- base::unlist(obj@SampleStats@nobs)

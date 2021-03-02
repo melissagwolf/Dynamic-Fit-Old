@@ -174,6 +174,7 @@ defre <- function(model,n){
   Mod <- utils::read.delim(model()$datapath, header = FALSE)   
   Mod_C <- base::as.character(Mod$V1) 
   
+  #Rename 
   true_dgm <- Mod_C
   
   #Run one simulation
@@ -181,10 +182,10 @@ defre <- function(model,n){
   fit <- lavaan::cfa(model=mod,data=dat,std.lv=TRUE)
   
   #Number of freely estimated paths
-  paths <- max(lavaan::parTable(fit)$free)
+  paths <- base::max(lavaan::parTable(fit)$free)
   
   #Number of unique values in input matrix
-  parms <- nrow(lavaan::lavInspect(fit,"std.lv")$theta)
+  parms <- base::nrow(lavaan::lavInspect(fit,"std.lv")$theta)
   tot.parms <- (parms*(1+parms))/2
   
   #Subtract
@@ -271,7 +272,7 @@ multi_factor_num <- function(model){
 
 
 ```{r multi_factor}
-#### Function for multi-factor misspecification (Cross-loading) ####
+#### Function to identify available items and loading magnitude ####
 
 multi_factor <- function(model){
   
@@ -283,16 +284,19 @@ multi_factor <- function(model){
   lav_file <- lavaan::lavaanify(Mod_C, fixed.x=FALSE) %>%
     dplyr::filter(.data$lhs != .data$rhs)
   
+  #read in number of factors
   num_fact <- number_factor(model()$datapath)
   
+  #read in viable items from each factor
   itemoptions <- multi_factor_num(model()$datapath)
   
+  #select lowest loading from each factor, in order of magnitude
   crosses <- itemoptions %>% 
-    group_by(lhs) %>% 
-    slice_min(abs(Loading)) %>% 
-    ungroup() %>% 
-    arrange(Priority,abs(Loading)) %>% 
-    slice(1:(num_fact-1))
+    dplyr::group_by(lhs) %>% 
+    dplyr::slice_min(base::abs(Loading)) %>% 
+    dplyr::ungroup() %>% 
+    dplyr::arrange(Priority,base::abs(Loading)) %>% 
+    dplyr::slice(1:(num_fact-1))
   
   #identify all factor names (again)
   factors <- lav_file %>%
@@ -339,55 +343,61 @@ multi_factor <- function(model){
     dplyr::filter(Item != "NA") %>% 
     dplyr::arrange(abs(Loading))
   
-  dup2 <- factcor1 %>%
-    dplyr::full_join(factcor2, by = c("lhs", "op", "rhs", "ustart", "type")) %>% 
-    dplyr::full_join(crosses,by="lhs") %>% 
-    dplyr::full_join(Coef_H,by="rhs") %>% 
-    dplyr::filter(Item != "NA") %>% 
-    dplyr::arrange(abs(Loading))
+  #Run twice for cleaning later
+  dup2 <- dup1
   
-  setup <- rbind(dup1,dup2) %>%  
-    mutate(lhs_1=lhs,
+  #Manipulate to create model statement
+  #Need to add factor correlation statement where lowest comes first
+  #So that we can remove from contention once a factor correlation is added
+  setup <- base::rbind(dup1,dup2) %>%  
+    dplyr::mutate(lhs_1=lhs,
            rhs_1=rhs,
-           f_min=pmin(lhs_1,rhs_1),
-           f_max=pmax(lhs_1,rhs_1)) %>% 
-    unite(facts,c("f_min","f_max")) %>% 
-    select(-lhs_1,-rhs_1) %>% 
-    distinct(lhs,op,rhs,ustart,type,Item,Loading,Priority,H,.keep_all = TRUE)
+           f_min=base::pmin(lhs_1,rhs_1),
+           f_max=base::pmax(lhs_1,rhs_1)) %>% 
+    tidyr::unite(facts,c("f_min","f_max")) %>% 
+    dplyr::select(-lhs_1,-rhs_1) %>% 
+    dplyr::distinct(lhs,op,rhs,ustart,type,Item,Loading,Priority,H,.keep_all = TRUE)
   
+  
+  #Rename for iteration
   setup_copy <- setup
   
-  cleaned <- data.frame(matrix(nrow=0,ncol=10)) %>% 
+  #Create empty dataframe
+  cleaned <- base::data.frame(base::matrix(nrow=0,ncol=10)) %>% 
     `colnames<-`(names(setup)) %>% 
-    mutate_if(is.logical, as.character)
+    dplyr::mutate_if(is.logical, as.character)
   
+  #Cycle through to grab F-1 misspecifications
+  #Select the highest H for first item I (for crossloading)
+  #Use anti_join to remove that factor correlation from the list for the next item
   for (i in unique(setup_copy$Item)){
     cleaned[i,] <- setup_copy %>% 
-      filter(Item==i) %>% 
-      slice_max(H)
-    setup_copy <- anti_join(setup_copy,cleaned,by="facts")
+      dplyr::filter(Item==i) %>% 
+      dplyr::slice_max(H)
+    setup_copy <- dplyr::anti_join(setup_copy,cleaned,by="facts")
   }
   
+  #Prep dtaframe for model statement
   modinfo <- cleaned %>% 
-    mutate(operator="=~",
-           H=as.numeric(H),
-           Loading=as.numeric(Loading),
-           ustart=as.numeric(ustart)) %>% 
-    arrange(Priority,Loading,-H) 
+    dplyr::mutate(operator="=~",
+           H=base::as.numeric(H),
+           Loading=base::as.numeric(Loading),
+           ustart=base::as.numeric(ustart)) %>% 
+    dplyr::arrange(Priority,Loading,-H) 
   
   #Compute maximum allowable cross loading value
   Cross_Loading <- modinfo %>% 
-    mutate(F1=ustart,
+    dplyr::mutate(F1=ustart,
            F1_Sq=F1^2,
            L1=Loading,
            L1_Sq=L1^2,
            E=1-L1_Sq) %>% 
-    mutate(MaxAllow=((sqrt(((L1_Sq*F1_Sq)+E))-(L1*F1))*.95),
-           MaxAllow2=round(MaxAllow,digits=4),
-           Final_Loading=pmin(Loading,MaxAllow2),
+    dplyr::mutate(MaxAllow=((base::sqrt(((L1_Sq*F1_Sq)+E))-(L1*F1))*.95),
+           MaxAllow2=base::round(MaxAllow,digits=4),
+           Final_Loading=base::pmin(Loading,MaxAllow2),
            times="*") %>% 
-    select(rhs,operator,Final_Loading,times,Item) %>% 
-    unite("V1",sep=" ")
+    dplyr::select(rhs,operator,Final_Loading,times,Item) %>% 
+    tidyr::unite("V1",sep=" ")
            
   #return value to append to model statement
   return(Cross_Loading)
@@ -411,12 +421,15 @@ Misspecified_DGM_Multi <- function(model){
   
   #This made you miserable. Shiny was struggling with \n at the end of strings here, for some reason.
   
+  #Create a list for every row in the mod object (misspecifications)
+  #For each element, bind the misspecification to the OG model statement sequentially
+  #Turn it into a dataframe and extract
   multi_mod <- lapply(seq(nrow(mod)), function(x) rbind(Mods,mod[seq(x), ,drop = FALSE]) %>%
-                        data.frame() %>% 
-                        pull(V1))
+                        base::data.frame() %>% 
+                        dplyr::pull(V1))
   
   return(multi_mod)
-
+  
 }
 
 ```
@@ -429,7 +442,7 @@ misspecified_model_fit <- function(model,n){
   #Get clean model equation
   mod <- cleanmodel(model()$datapath)
 
-  #Get parameters for misspecified dgm
+  #Get parameters for misspecified dgm (this is a list)
   misspec_dgm <- Misspecified_DGM_Multi(model()$datapath)
 
   #Use max sample size of 2000
@@ -438,28 +451,32 @@ misspecified_model_fit <- function(model,n){
   #Set seed
   set.seed(269854)
   
-  #Simulate one large dataset for each misspecification
+  #Simulate one large dataset for each misspecification (use map to apply across each
+  #element (set of misspecifications) in the list)
   all_data_misspec <- purrr::map(misspec_dgm,~simstandard::sim_standardized(m=.,n=n*500,
                                                         latent=FALSE,errors=FALSE))
   
   #Create indicator to split into 500 datasets for 500 reps
   rep_id_misspec <- rep(1:500,n)
   
-  #Combine indicator with dataset
-  dat_rep_misspec <- map(all_data_misspec,~cbind(.,rep_id_misspec))
+  #Combine indicator with dataset for each element in list
+  dat_rep_misspec <- purrr::map(all_data_misspec,~cbind(.,rep_id_misspec))
   
   #Group and list
-  misspec_data <- map(dat_rep_misspec,~group_by(.,rep_id_misspec) %>% 
-                        nest())
+  misspec_data <- purrr::map(dat_rep_misspec,~group_by(.,rep_id_misspec) %>% 
+                        tidyr::nest())
   
   #Grab data level of the list
-  data <- map(misspec_data,2)
+  data <- purrr::map(misspec_data,2)
   
-  #Run 500 cfa
-  misspec_cfa <- map(data, function(x) map(x, function(y) cfa(model = mod, data=y, std.lv=TRUE)))
+  #Run 500 cfa for each element in the list
+  misspec_cfa <- purrr::map(data, function(x) purrr::map(x, function(y) lavaan::cfa(model = mod, data=y, std.lv=TRUE)))
   
-  #Extract fit stats from each rep (list) into a data frame and clean
-  misspec_fit_sum <- map(misspec_cfa, function(x) map_dfr(x, function(y) fitMeasures(y, c("srmr","rmsea","cfi"))) %>% 
+  #Extract fit stats from each rep (list) into a data frame and clean using nested lapply
+  #map_dfr returns data frame instead of list
+  #for each misspecification level (in the list), access the lavaan objects (x)
+  #and extract the fit stats (y) - and return as a df
+  misspec_fit_sum <- purrr::map(misspec_cfa, function(x) purrr::map_dfr(x, function(y) lavaan::fitMeasures(y, c("srmr","rmsea","cfi"))) %>% 
                            `colnames<-`(c("SRMR_M","RMSEA_M","CFI_M")) %>%
                            dplyr::mutate(Type_M="Misspecified"))
 
@@ -474,6 +491,9 @@ misspecified_model_fit <- function(model,n){
 ```{r true_dgm}
 #### Function to create True DGM (aka, just the model the user read in) ####
 true_model_fit <- function(model,n){
+  
+  #Can make this faster by only doing it once
+  #Would need to change table. Not sure what would happen to plot.
 
   #Get clean model equation
   mod <- cleanmodel(model()$datapath)
@@ -482,6 +502,7 @@ true_model_fit <- function(model,n){
   Mods <- utils::read.delim(model()$datapath, header = FALSE)   
   Mod_C <- base::as.character(Mods$V1) 
   
+  #Rename
   true_dgm <- Mod_C
 
   #Use max sample size of 10000
@@ -526,8 +547,6 @@ true_model_fit <- function(model,n){
 #### Function to combine both model fit stats for all levels into one dataframe ####
 
 multi_df <- eventReactive(input$go,{
-
-  #Probably need some sort of grouping statement
   
   #Use max sample size of 2000
   n <- min(n(),2000)
@@ -538,8 +557,8 @@ multi_df <- eventReactive(input$go,{
   #Get fit stats for correctly specified model
   true_fit <- true_model_fit(model()$datapath,n)
 
-  #Produce final table by level
-  Table <- map(misspec_fit,~cbind(.,true_fit))
+  #Produce final table of fit indices for each level (as a list)
+  Table <- purrr::map(misspec_fit,~cbind(.,true_fit))
 
   #Final table
   return(Table)
@@ -566,16 +585,6 @@ Row {.tabset}
 1. **Important**: Make sure to press enter at the end of the last line of the model statement before saving the text file.  
 1. Upload the text file with the model statement and press submit.
 1. When the simulations are complete, the results will appear in the **Results** and **Plots** tabs.
-
-**Example:**
-
-<div>
-```{r instructions, out.width="65%"}
-include_graphics("Example3.png")
-```
-</div>
-
-**Note**: These cutoff values are currently only accurate for **single level** models.  Any cutoff values produced for bi-factor models or higher-order models are inaccurate (you will likely get an error message if you try to compute them).
 
 <div>
 ```{r progress1}
@@ -612,6 +621,16 @@ renderPlot({
 ```
 </div>
 
+**Example:**
+
+<div>
+```{r instructions, out.width="65%"}
+include_graphics("Example3.png")
+```
+</div>
+
+**Note**: These cutoff values are currently only accurate for **single level** models.  Any cutoff values produced for bi-factor models or higher-order models are inaccurate (you will likely get an error message if you try to compute them).
+
 ### Results
 
 These are the dynamic model fit index cutoff values for your model:
@@ -642,52 +661,64 @@ renderTable({
     shiny::need(nrow(multi_factor_num(model()$datapath))>(number_factor(model()$datapath)-1),
                      "There are not enough free items to produce all misspecification levels."))
 
+  #Get the data ready to go
   results <- multi_df()
-
-  misspec_sum <- map(results,~summarise(.,SRMR_M=quantile(SRMR_M, c(.05,.1)),
+  
+  #For each list element (misspecification) compute the cutoffs
+  misspec_sum <- purrr::map(results,~dplyr::summarise(.,SRMR_M=quantile(SRMR_M, c(.05,.1)),
                                         RMSEA_M=quantile(RMSEA_M, c(.05,.1)),
                                         CFI_M=quantile(CFI_M, c(.95,.9))))
-  true_sum <- map(results,~dplyr::summarise(.,SRMR_T=quantile(SRMR_T, c(.95,.9)),
+  
+  #For the true model, compute the cutoffs (these will all be the same - just need in list form)
+  true_sum <- purrr::map(results,~dplyr::summarise(.,SRMR_T=quantile(SRMR_T, c(.95,.9)),
                                             RMSEA_T=quantile(RMSEA_T, c(.95,.9)),
                                             CFI_T=quantile(CFI_T, c(.05,.1))))
   
-  Table <- map(misspec_sum,~cbind(.,true_sum[[1]]) %>% 
-                 mutate(SRMR_R=base::round(SRMR_M,3),
-                        RMSEA_R=base::round(RMSEA_M,3),
-                        CFI_R=base::round(CFI_M,3),
-                        SRMR=base::ifelse(SRMR_T<SRMR_M,SRMR_R,"NONE"),
-                        RMSEA=base::ifelse(RMSEA_T<RMSEA_M,RMSEA_R,"NONE"),
-                        CFI=base::ifelse(CFI_T>CFI_M,CFI_R,"NONE")) %>%
+  #Bind each of the misspecified cutoffs to the true cutoffs, listwise
+  Table <- purrr::map(misspec_sum,~cbind(.,true_sum[[1]]) %>% 
+                 dplyr::mutate(SRMR_R=base::round(SRMR_M,3),
+                               RMSEA_R=base::round(RMSEA_M,3),
+                               CFI_R=base::round(CFI_M,3),
+                               SRMR=base::ifelse(SRMR_T<SRMR_M,SRMR_R,"NONE"),
+                               RMSEA=base::ifelse(RMSEA_T<RMSEA_M,RMSEA_R,"NONE"),
+                               CFI=base::ifelse(CFI_T>CFI_M,CFI_R,"NONE")) %>%
                  dplyr::select(SRMR,RMSEA,CFI)) 
   
-  Row2 <- map_dfr(Table,~mutate(.,SRMR_1=SRMR,
+  #This is to clean up the table for presentation
+  Row2 <- purrr::map_dfr(Table,~dplyr::mutate(.,SRMR_1=SRMR,
                                 RMSEA_1=RMSEA,
                                 CFI_1=CFI) %>%
-                    mutate_at(c("SRMR_1","RMSEA_1","CFI_1"),list(lead)) %>% 
-                    slice(1) %>% 
-                    mutate(SRMR=ifelse(is.character(SRMR),SRMR_1,"--"),
+                    dplyr::mutate_at(c("SRMR_1","RMSEA_1","CFI_1"),list(lead)) %>% 
+                    dplyr::slice(1) %>% 
+                    dplyr::mutate(SRMR=ifelse(is.character(SRMR),SRMR_1,"--"),
                            RMSEA=ifelse(is.character(RMSEA),RMSEA_1,"--"),
                            CFI=ifelse(is.character(CFI),CFI_1,"--"),
                            SRMR=str_replace_all(as.character(SRMR),"0\\.","."),
                            RMSEA=str_replace_all(as.character(RMSEA),"0\\.","."),
                            CFI=str_replace_all(as.character(CFI),"0\\.",".")) %>%
-                    select(SRMR,RMSEA,CFI)) 
+                    dplyr::select(SRMR,RMSEA,CFI)) 
   
-  Table_C <- map_dfr(Table,~mutate(.,SRMR=str_replace_all(as.character(SRMR),"0\\.","."),
-                                   RMSEA=str_replace_all(as.character(RMSEA),"0\\.","."),
-                                   CFI=str_replace_all(as.character(CFI),"0\\.",".")))
-
+  #Still cleaning
+  Table_C <- purrr::map_dfr(Table,~dplyr::mutate(.,SRMR=stringr::str_replace_all(as.character(SRMR),"0\\.","."),
+                                                 RMSEA=stringr::str_replace_all(as.character(RMSEA),"0\\.","."),
+                                                 CFI=stringr::str_replace_all(as.character(CFI),"0\\.",".")))
+  
+  #Cleaning
   Table_C[seq(2,nrow(Table_C),by=2),] <- Row2 
   
+  #For row names
   num_fact <- (number_factor(model()$datapath)-1)
   
+  #Create row names for level
   Table_C$levelnum <- paste("Level", rep(1:num_fact,each=2))
   
+  #Create row names for proportions
   Table_C$cut <- rep(c("95/5","90/10"))
   
+  #Add rownames to final table
   Final_Table <- Table_C %>% 
-    unite(Cut,levelnum,cut,sep=": ") %>% 
-    column_to_rownames(var='Cut')
+    tidyr::unite(Cut,levelnum,cut,sep=": ") %>% 
+    tibble::column_to_rownames(var='Cut')
   
   },
     digits=3, align='c', rownames = TRUE, width="auto",
@@ -723,6 +754,8 @@ A comparison of the fit index distributions for the "true" empirical model and t
 <div>
 ```{r fit-plot}
 #Generate corresponding distributions of fit indices for each model
+#This is a reactive, not a render table.  Save it as an object to call later
+#Necessary because of lists
 plotlist <- reactive({
   
   shiny::validate(
@@ -746,24 +779,33 @@ plotlist <- reactive({
     shiny::need(nrow(multi_factor_num(model()$datapath))>(number_factor(model()$datapath)-1),
                      "There are not enough free items to produce all misspecification levels."))
   
+  #Get the data ready to go
   results <- multi_df()
   
-  misspec_sum <- map(results,~summarise(.,SRMR_M=quantile(SRMR_M, c(.05,.1)),
+  #For each list element (misspecification) compute the cutoffs
+  misspec_sum <- purrr::map(results,~dplyr::summarise(.,SRMR_M=quantile(SRMR_M, c(.05,.1)),
                                         RMSEA_M=quantile(RMSEA_M, c(.05,.1)),
                                         CFI_M=quantile(CFI_M, c(.95,.9))))
-  true_sum <- map(results,~dplyr::summarise(.,SRMR_T=quantile(SRMR_T, c(.95,.9)),
+  
+  #For the true model, compute the cutoffs (these will all be the same - just need in list form)
+  true_sum <- purrr::map(results,~dplyr::summarise(.,SRMR_T=quantile(SRMR_T, c(.95,.9)),
                                             RMSEA_T=quantile(RMSEA_T, c(.95,.9)),
                                             CFI_T=quantile(CFI_T, c(.05,.1))))
   
-  Misspec_dat <- map(results,~select(.,SRMR_M:Type_M) %>% 
+  #Select just those variables and rename columns to be the same
+  Misspec_dat <- purrr::map(results,~dplyr::select(.,SRMR_M:Type_M) %>% 
                        `colnames<-`(c("SRMR","RMSEA","CFI","Model")))
   
-  True_dat <- map(results,~select(.,SRMR_T:Type_T) %>% 
+  #Select just those variables and rename columns to be the same
+  True_dat <- purrr::map(results,~dplyr::select(.,SRMR_T:Type_T) %>% 
                     `colnames<-`(c("SRMR","RMSEA","CFI","Model")))
   
-  plot <- lapply(seq(length(Misspec_dat)),function(x) bind_rows(Misspec_dat[x],True_dat[x]))
+  #For each element in the list, bind the misspecified cutoffs to the true cutoffs
+  #rbind doesn't work well with lists (needs do.call statement)
+  plot <- lapply(seq(length(Misspec_dat)),function(x) dplyr::bind_rows(Misspec_dat[x],True_dat[x]))
   
-  SRMR_plot <- map2(plot,misspec_sum,~ggplot(data=.x,aes(x=SRMR,fill=Model))+
+  #Plot SRMR. Need map2 and data=.x (can't remember why).
+  SRMR_plot <- purrr::map2(plot,misspec_sum,~ggplot(data=.x,aes(x=SRMR,fill=Model))+
                       geom_histogram(position="identity",
                                      alpha=.5, bins=30)+
                       scale_fill_manual(values=c("#E9798C","#66C2F5"))+
@@ -790,8 +832,8 @@ plotlist <- reactive({
                             legend.title = element_blank(),
                             legend.box = "vertical"))
   
-  
-  RMSEA_plot <- map2(plot,misspec_sum,~ggplot(data=.x,aes(x=RMSEA,fill=Model))+
+  #Plot RMSEA.  Need map2 and data=.x (can't remember why).
+  RMSEA_plot <- purrr::map2(plot,misspec_sum,~ggplot(data=.x,aes(x=RMSEA,fill=Model))+
                        geom_histogram(position="identity",
                                       alpha=.5, bins=30)+
                        scale_fill_manual(values=c("#E9798C","#66C2F5"))+
@@ -818,7 +860,8 @@ plotlist <- reactive({
                              legend.title = element_blank(),
                              legend.box = "vertical"))
   
-  CFI_plot <- map2(plot,misspec_sum,~ggplot(data=.x,aes(x=CFI,fill=Model))+
+  #Plot CFI. Need map2 and data=.x (can't remember why).
+  CFI_plot <- purrr::map2(plot,misspec_sum,~ggplot(data=.x,aes(x=CFI,fill=Model))+
                      geom_histogram(position="identity",
                                     alpha=.5, bins=30)+
                      scale_fill_manual(values=c("#E9798C","#66C2F5"))+
@@ -846,8 +889,10 @@ plotlist <- reactive({
                            legend.box = "vertical"))
   
   
+  #Create a list with the plots combined for each severity level
   plots_combo <- lapply(seq(length(plot)),function(x) c(SRMR_plot[x],RMSEA_plot[x],CFI_plot[x]))
   
+  #Add a collective legend and title with the level indicator
   plots <- lapply(seq(length(plots_combo)), function(x) wrap_plots(plots_combo[[x]])+
            plot_layout(guides = "collect")+
            plot_annotation(title=paste("Level", x))
@@ -856,6 +901,8 @@ plotlist <- reactive({
   plots
   
 })
+
+#https://stackoverflow.com/questions/36799901/r-markdown-shiny-renderplot-list-of-plots-from-lapply
 
 renderUI({
     plot_output_list <- lapply(1:length(plotlist()), function(i) {
@@ -908,8 +955,10 @@ renderTable({
     shiny::need(nrow(multi_factor_num(model()$datapath))>(number_factor(model()$datapath)-1),
                      "There are not enough free items to produce all misspecification levels."))
   
+  #Return crossloadings that were added
   m_info <- multi_factor(model()$datapath)
   
+  #Just simple formatting
   add <- m_info %>% 
     tidyr::separate(V1, into=c("a","b","c","d","e"), sep=" ") %>% 
     dplyr::select(c) %>% 
@@ -917,7 +966,7 @@ renderTable({
                   "Additional Paths in DGM"=dplyr::row_number(),
                   "Level"=paste("Level",row_number())) %>% 
     dplyr::select("Level","Additional Paths in DGM","Magnitude of Omitted Loading") %>% 
-    column_to_rownames(var="Level")
+    tibble::column_to_rownames(var="Level")
   
   add
 },
@@ -930,27 +979,19 @@ renderTable({
 
 To cite the ideas behind dynamic model fit index cutoff values:
 
-- [McNeish, D.](https://sites.google.com/site/danielmmcneish/home){target="_parent"} & [Wolf, M. G.](https://www.melissagwolf.com/){target="_parent"} (2020, July 7). Dynamic Fit Index Cutoffs for Confirmatory Factor Analysis Models. https://doi.org/10.31234/osf.io/v8yru
+- [McNeish, D.](https://sites.google.com/site/danielmmcneish/home){target="_parent"} & [Wolf, M. G.](https://www.melissagwolf.com/){target="_parent"} (2020, July 7). Dynamic Fit Index Cutoffs for Confirmatory Factor Analysis Models. [https://doi.org/10.31234/osf.io/v8yru](https://doi.org/10.31234/osf.io/v8yru){target="_parent"}
 
     - *Paper is currently under review*
 
 To cite the dynamic model index cutoff values generated by this app:
 
-- [Wolf, M. G.](https://www.melissagwolf.com/){target="_parent"} & [McNeish, D.](https://sites.google.com/site/danielmmcneish/home){target="_parent"} (2020). Dynamic Model Fit. R Shiny application version 1.0.1.
+- [Wolf, M. G.](https://www.melissagwolf.com/){target="_parent"} & [McNeish, D.](https://sites.google.com/site/danielmmcneish/home){target="_parent"} (2020). Dynamic Model Fit. R Shiny application version 1.1.0.
 
     - *An accompanying R package is under development*
+    
+<span style="color: #93002D;">Please submit bug reports to [Melissa Wolf](mailto:melissagordon@ucsb.edu).</span>
 
 \  
-
-To learn more about why you should use dynamic model fit index cutoffs instead of [Hu & Bentler's (1999)](https://psycnet.apa.org/record/1998-03102-001){target="_parent"} fixed model fit index cutoff values, consider these articles:
-
-- Greiff, S., & Heene, M. [(2017)](https://doi.org/10.1027/1015-5759/a000450){target="_parent"}. Why psychological assessment needs to start worrying about model fit [Editorial]. *European Journal of Psychological Assessment, 33*(5), 313–317. 
-- Hancock, G. R., & Mueller, R. O. [(2011)](https://pdfs.semanticscholar.org/53d6/c1690265df617dd33ebc94cdc76fbf97777d.pdf){target="_parent"}. The reliability paradox in assessing structural relations within covariance structure models. *Educational and Psychological Measurement, 71*(2), 306–324.
-- Heene, M., Hilbert, S., Draxler, C., Ziegler, M., & Bühner, M. [(2011)](https://doi.org/10.1037/a0024917){target="_parent"}. Masking misfit in confirmatory factor analysis by increasing unique variances: A cautionary note on the usefulness of cutoff values of fit indices. *Psychological Methods, 16*(3), 319–336. 
-- Marsh, H. W., Hau, K. T., & Wen, Z. [(2004)](https://www.researchgate.net/publication/289963902_In_Search_of_Golden_Rules_Comment_on_Hypothesis-Testing_Approaches_to_Setting_Cutoff_Values_for_Fit_Indexes_and_Dangers_in_Overgeneralizing_Hu_and_Bentler's_1999_Findings){target="_parent"}. In Search of Golden Rules: Comment on Hypothesis-Testing Approaches to Setting Cutoff Values for Fit Indexes and Dangers in Overgeneralizing Hu and Bentler's (1999) Findings. *Structural Equation Modeling: A Multidisciplinary Journal, 11*(3), 320-341.
-- McNeish, D., An, J. & Hancock, G. R. [(2018)](https://www.researchgate.net/publication/311536084_The_Thorny_Relation_between_Measurement_Quality_and_Fit_Index_Cut-Offs_in_Latent_Variable_Models){target="_parent"}. The Thorny Relation Between Measurement Quality and Fit Index Cutoffs in Latent Variable Models. *Journal of Personality Assessment, 100*(1), 43-52.
-- Millsap, R. E. [(2007)](https://www.sciencedirect.com/science/article/abs/pii/S0191886906003862){target="_parent"}. Structural equation modeling made difficult. *Personality and Individual Differences, 42*, 875-881.
-- Muliak, S. [(2007)](https://psycnet.apa.org/record/2007-02474-010){target="_parent"}. There is a place for approximate fit in structural equation modelling. *Personality and Individual Differences, 42*(5), 883–891.
 
 Computationally, this app relies on the following packages:
 

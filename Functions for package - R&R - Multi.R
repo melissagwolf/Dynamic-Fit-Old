@@ -642,6 +642,8 @@ cfaHB <- function(model,n=NULL,plot=FALSE,string=FALSE){
            Magnitude=round(Magnitude,digits=3)) %>% 
     slice(rep(1:n(),each=2)))
   
+  rownames(mag) <- NULL
+  
   #Clean cross-loading magnitude
   even <- seq_len(nrow(mag))%%2
   mag2 <- cbind(mag,even) %>% 
