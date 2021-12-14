@@ -96,6 +96,47 @@ n <- eventReactive(input$go,{input$sampsize})
 model <- eventReactive(input$go,{input$model_syntax})
 ```
 
+```{r trycatch}
+##Catching Errors
+
+#Returns 1 if there is lavaan is unable to lavaanify a statement
+modelerror <- function(model){
+  
+  #read in the model
+  Mod <- utils::read.delim(model()$datapath, header = FALSE)   
+  Mod_C <- base::as.character(Mod$V1)
+  
+  tryCatch({
+    lavaan::lavaanify(Mod_C)
+  },
+  error = function(e){
+    return(1)
+  })
+}
+
+#Counts number of NAs in the ustart column from lavaanify.  I'm a little worried about this one, but the goal is to catch anyone who omits a plus sign.  Returns the number of rows with an NA, so we want a value of 0 for no errors.
+missing_plus <- function(model){
+  
+  #read in the model
+  Mod <- utils::read.delim(model()$datapath, header = FALSE)   
+  Mod_C <- base::as.character(Mod$V1)
+
+  #prep the model
+  lav_file <- lavaan::lavaanify(Mod_C, fixed.x=FALSE) %>%
+    dplyr::filter(.data$lhs != .data$rhs)
+
+  #record number of NA values
+  na_val <- lav_file %>% 
+  filter(is.na(lav_file$ustart))
+  
+  #count NAs
+  na_val_count <- nrow(na_val)
+  
+  return(na_val_count)
+
+}
+```
+
 ```{r number_factor}
 #### Function for Number of Factors for Warning ####
 
@@ -134,7 +175,7 @@ unstandardized <- function(model){
     dplyr::filter(.data$lhs != .data$rhs)                  
   
   one_plus <- lav_file %>% 
-    dplyr::filter(ustart >= 1) %>% 
+    dplyr::filter(ustart >= 1| ustart <= -1) %>% 
     base::nrow()
   
   return(one_plus)
@@ -474,6 +515,14 @@ Row {.tabset}
 
 renderPlot({
   
+    shiny::validate(
+    shiny::need(modelerror(model()$datapath) != 1,
+                "It looks like there might be an error in your model statement. Common errors include: an extra decimal, a missing asterisk, or a missing plus sign. Please inspect your model statement."))
+  
+  shiny::validate(
+    shiny::need(missing_plus(model()$datapath)==0,
+                "I think you forgot to include a plus sign in your model statement.  Please inspect your model statement.  This is an experimental error message.  Please email melissagordon@ucsb.edu if you believe this error message is incorrect."))
+  
   shiny::validate(
           shiny::need(tools::file_ext(model()$name) %in% 
                  c('text','.txt','txt'),
@@ -485,7 +534,7 @@ renderPlot({
 
   shiny::validate(
     shiny::need(unstandardized(model()$datapath)==0,
-    "One of your loadings or correlations has a value of 1 or above (an impossible value). You must use standardized loadings."))
+    "One of your loadings or correlations has an absolute value of 1 or above (an impossible value). Please use standardized loadings. If all of your loadings are under 1, try looking for a missing decimal somewhere in your model statement."))
   
   shiny::validate(
     shiny::need(defre(model()$datapath,n())>1,
@@ -521,6 +570,14 @@ These are the dynamic fit index cutoff values for your model:
 #Generate dynamic model fit index cutoffs and table
 renderTable({
   
+    shiny::validate(
+    shiny::need(modelerror(model()$datapath) != 1,
+                "It looks like there might be an error in your model statement. Common errors include: an extra decimal, a missing asterisk, or a missing plus sign. Please inspect your model statement."))
+  
+    shiny::validate(
+    shiny::need(missing_plus(model()$datapath)==0,
+                "I think you forgot to include a plus sign in your model statement.  Please inspect your model statement.  This is an experimental error message.  Please email melissagordon@ucsb.edu if you believe this error message is incorrect."))
+  
   shiny::validate(
           shiny::need(tools::file_ext(model()$name) %in% 
                  c('text','.txt','txt'),
@@ -532,7 +589,7 @@ renderTable({
 
   shiny::validate(
     shiny::need(unstandardized(model()$datapath)==0,
-    "One of your loadings or correlations has a value of 1 or above (an impossible value). You must use standardized loadings."))
+    "One of your loadings or correlations has an absolute value of 1 or above (an impossible value). Please use standardized loadings. If all of your loadings are under 1, try looking for a missing decimal somewhere in your model statement."))
   
   shiny::validate(
     shiny::need(defre(model()$datapath,n())>1,
@@ -623,7 +680,15 @@ A comparison of the fit index distributions for the "true" empirical model and t
 ```{r fit-plot}
 #Generate corresponding distributions of fit indices for each model
 plotlist <- reactive({
+
+    shiny::validate(
+    shiny::need(modelerror(model()$datapath) != 1,
+                "It looks like there might be an error in your model statement. Common errors include: an extra decimal, a missing asterisk, or a missing plus sign. Please inspect your model statement."))
   
+    shiny::validate(
+    shiny::need(missing_plus(model()$datapath)==0,
+                "I think you forgot to include a plus sign in your model statement.  Please inspect your model statement.  This is an experimental error message.  Please email melissagordon@ucsb.edu if you believe this error message is incorrect."))
+    
   shiny::validate(
           shiny::need(tools::file_ext(model()$name) %in% 
                  c('text','.txt','txt'),
@@ -635,7 +700,7 @@ plotlist <- reactive({
 
   shiny::validate(
     shiny::need(unstandardized(model()$datapath)==0,
-    "One of your loadings or correlations has a value of 1 or above (an impossible value). You must use standardized loadings."))
+    "One of your loadings or correlations has an absolute value of 1 or above (an impossible value). Please use standardized loadings. If all of your loadings are under 1, try looking for a missing decimal somewhere in your model statement."))
   
   shiny::validate(
     shiny::need(defre(model()$datapath,n())>1,
@@ -673,11 +738,11 @@ plotlist <- reactive({
                                      linetype=".08",color=".08"),
                                  size=.75)+
                       scale_color_manual(name="Cutoff Values",
-                                         labels=c("Hu & Benter Cutoff","Dynamic Cutoff"),
+                                         labels=c("Dynamic Cutoff","Hu & Benter Cutoff"),
                                          values=c("misspec_sum$SRMR_M[1]"="black",
                                                   ".08"="black"))+
                       scale_linetype_manual(name="Cutoff Values",
-                                            labels=c("Hu & Benter Cutoff","Dynamic Cutoff"),
+                                            labels=c("Dynamic Cutoff","Hu & Benter Cutoff"),
                                             values=c("misspec_sum$SRMR_M[1]"="longdash",
                                                      ".08"="dotted"))+
                       theme(axis.title.y = element_blank(),
@@ -701,11 +766,11 @@ plotlist <- reactive({
                                       linetype=".06",color=".06"),
                                   size=.75)+
                        scale_color_manual(name="Cutoff Values",
-                                          labels=c("Hu & Benter Cutoff","Dynamic Cutoff"),
+                                          labels=c("Dynamic Cutoff","Hu & Benter Cutoff"),
                                           values=c("misspec_sum$RMSEA_M[1]"="black",
                                                    ".06"="black"))+
                        scale_linetype_manual(name="Cutoff Values",
-                                             labels=c("Hu & Benter Cutoff","Dynamic Cutoff"),
+                                             labels=c("Dynamic Cutoff","Hu & Benter Cutoff"),
                                              values=c("misspec_sum$RMSEA_M[1]"="longdash",
                                                       ".06"="dotted"))+
                        theme(axis.title.y = element_blank(),
@@ -728,11 +793,11 @@ plotlist <- reactive({
                                     linetype=".95",color=".95"),
                                 size=.75)+
                      scale_color_manual(name="Cutoff Values",
-                                        labels=c("Hu & Benter Cutoff","Dynamic Cutoff"),
+                                        labels=c("Dynamic Cutoff","Hu & Benter Cutoff"),
                                         values=c("misspec_sum$CFI_M[1]"="black",
                                                  ".95"="black"))+
                      scale_linetype_manual(name="Cutoff Values",
-                                           labels=c("Hu & Benter Cutoff","Dynamic Cutoff"),
+                                           labels=c("Dynamic Cutoff","Hu & Benter Cutoff"),
                                            values=c("misspec_sum$CFI_M[1]"="longdash",
                                                     ".95"="dotted"))+
                      theme(axis.title.y = element_blank(),
@@ -824,6 +889,14 @@ This app began as a project in a graduate course taught by [Allison Horst](https
 
 renderPlot({
   
+    shiny::validate(
+    shiny::need(modelerror(model()$datapath) != 1,
+                "It looks like there might be an error in your model statement. Common errors include: an extra decimal, a missing asterisk, or a missing plus sign. Please inspect your model statement."))
+  
+    shiny::validate(
+    shiny::need(missing_plus(model()$datapath)==0,
+                "I think you forgot to include a plus sign in your model statement.  Please inspect your model statement.  This is an experimental error message.  Please email melissagordon@ucsb.edu if you believe this error message is incorrect."))
+  
   shiny::validate(
           shiny::need(tools::file_ext(model()$name) %in% 
                  c('text','.txt','txt'),
@@ -835,7 +908,7 @@ renderPlot({
 
   shiny::validate(
     shiny::need(unstandardized(model()$datapath)==0,
-    "One of your loadings or correlations has a value of 1 or above (an impossible value). You must use standardized loadings."))
+    "One of your loadings or correlations has an absolute value of 1 or above (an impossible value). Please use standardized loadings. If all of your loadings are under 1, try looking for a missing decimal somewhere in your model statement."))
   
   shiny::validate(
     shiny::need(defre(model()$datapath,n())>0,
