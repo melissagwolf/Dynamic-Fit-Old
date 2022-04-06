@@ -78,7 +78,7 @@ This app uses Monte Carlo simulations to generate dynamic fit index cutoff value
 ```{r inputs}
 numericInput("sampsize", "Input Sample Size", value=NULL)
 
-fileInput("model_syntax", "Input Model Syntax",
+fileInput("model_syntax", "Input Model Statement",
           placeholder = ".txt file",
           accept = c("text",
                      ".txt",
